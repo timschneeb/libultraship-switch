@@ -175,9 +175,6 @@ void Gui::Init(GuiWindowInitData windowImpl) {
     ImGui::GetStyle().ScaleAllSizes(2);
 #endif
 
-    CVarClear("gNewFileDropped");
-    CVarClear("gDroppedFile");
-
     mInterpreter = dynamic_pointer_cast<Fast::Fast3dWindow>(Context::GetInstance()->GetWindow())->GetInterpreterWeak();
 
 #ifdef __SWITCH__
