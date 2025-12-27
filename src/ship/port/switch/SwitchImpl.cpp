@@ -26,13 +26,13 @@ void Ship::Switch::Init(SwitchPhase phase) {
     switch (phase) {
         case PreInitPhase:
             DetectAppletMode();
-            break;
-        case PostInitPhase:
-            appletInitializeGamePlayRecording();
 #ifdef DEBUG
             socketInitializeDefault();
             nxlinkStdio();
 #endif
+            break;
+        case PostInitPhase:
+            appletInitializeGamePlayRecording();
             appletSetGamePlayRecordingState(true);
             appletHook(&applet_hook_cookie, on_applet_hook, NULL);
             appletSetFocusHandlingMode(AppletFocusHandlingMode_NoSuspend);
