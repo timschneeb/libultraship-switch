@@ -748,7 +748,7 @@ bool GfxWindowBackendSDL2::CanDisableVsync() {
 }
 
 bool GfxWindowBackendSDL2::IsRunning() {
-#ifdef __SWITCH
+#ifdef __SWITCH__
     return mIsRunning && Ship::Switch::IsRunning();
 #else
     return mIsRunning;
