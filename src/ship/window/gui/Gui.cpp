@@ -31,7 +31,7 @@
 #endif
 
 #ifdef __SWITCH__
-#include "port/switch/SwitchImpl.h"
+#include "ship/port/switch/SwitchImpl.h"
 #endif
 
 #if defined(__ANDROID__) || defined(__IOS__)

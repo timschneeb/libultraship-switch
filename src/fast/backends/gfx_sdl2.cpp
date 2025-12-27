@@ -367,9 +367,7 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
 
 #ifdef __SWITCH__
     // For Switch we need to set the window width before creating the window
-    Ship::Switch::GetDisplaySize(&window_width, &window_height);
-    width = window_width;
-    height = window_height;
+    Ship::Switch::GetDisplaySize(&mWindowWidth, &mWindowHeight);
 #endif
 
 #ifdef __IOS__
@@ -613,7 +611,7 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
 #ifdef __APPLE__
                     SDL_GetWindowSize(mWnd, &mWindowWidth, &mWindowHeight);
 #elif defined(__SWITCH__)
-                    Ship::Switch::GetDisplaySize(&window_width, &window_height);
+                    Ship::Switch::GetDisplaySize(&mWindowWidth, &mWindowHeight);
 #else
                     SDL_GL_GetDrawableSize(mWnd, &mWindowWidth, &mWindowHeight);
 #endif
