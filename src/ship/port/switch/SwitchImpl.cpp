@@ -3,10 +3,10 @@
 #include <switch.h>
 #include <SDL2/SDL.h>
 #include "SwitchPerformanceProfiles.h"
-#include "public/bridge/consolevariablebridge.h"
+#include "libultraship/bridge/consolevariablebridge.h"
 #include <spdlog/spdlog.h>
-#include "Context.h"
-#include "audio/Audio.h"
+#include "ship/Context.h"
+#include "ship/audio/Audio.h"
 
 #include <imgui_internal.h>
 
@@ -173,7 +173,7 @@ static void on_applet_hook(AppletHookType hook, void* param) {
                 // reinitialize audio subsystem to fix audio problems after resuming from sleep
                 // see https://github.com/HarbourMasters/Shipwright/issues/3317
                 SPDLOG_INFO("restarting SDL audio system to work around audio problems on resume");
-                Ship::Context::GetInstance()->GetAudio()->SetAudioBackend(Ship::AudioBackend::SDL);
+                Ship::Context::GetInstance()->GetAudio()->SetCurrentAudioBackend(Ship::AudioBackend::SDL);
             }
 
             break;
