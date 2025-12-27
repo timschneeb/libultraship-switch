@@ -70,7 +70,12 @@ find_package(nlohmann_json REQUIRED)
 target_link_libraries(libultraship PUBLIC nlohmann_json::nlohmann_json)
 
 find_package(tinyxml2 REQUIRED)
-target_link_libraries(libultraship PUBLIC tinyxml2::tinyxml2)
+
+if (CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
+    target_link_libraries(libultraship PUBLIC tinyxml2)
+else()
+    target_link_libraries(libultraship PUBLIC tinyxml2::tinyxml2)
+endif()
 
 find_package(spdlog REQUIRED)
 target_link_libraries(libultraship PUBLIC spdlog::spdlog)
