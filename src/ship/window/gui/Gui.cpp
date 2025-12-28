@@ -319,8 +319,8 @@ void Gui::HandleWindowEvents(WindowEvent event) {
             ImGui_ImplSDL2_ProcessEvent(static_cast<const SDL_Event*>(event.Sdl.Event));
 #if defined(__ANDROID__) || defined(__IOS__)
             Mobile::ImGuiProcessEvent(mImGuiIo->WantTextInput);
-#elif defined(__ANDROID__) || defined(__IOS__)
-            Mobile::ImGuiProcessEvent(mImGuiIo->WantTextInput);
+#elif defined(__SWITCH__)
+            Ship::Switch::ImGuiProcessEvent(mImGuiIo->WantTextInput);
 #endif
             break;
 #ifdef ENABLE_DX11
