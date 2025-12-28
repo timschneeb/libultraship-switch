@@ -143,3 +143,32 @@ index ee64116ff..d61174885 100644
 -- 
 2.52.0
 
+From 9fbae2c875b29d21d6afe9a12c8579a96fca1f99 Mon Sep 17 00:00:00 2001
+From: Tim Schneeberger <tim.schneeberger@outlook.de>
+Date: Sun, 28 Dec 2025 02:42:11 +0100
+Subject: [PATCH] Avoid redefinition of overridden macro on Switch
+
+---
+ imgui_internal.h | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/imgui_internal.h b/imgui_internal.h
+index 69f550668..c60c20bec 100644
+--- a/imgui_internal.h
++++ b/imgui_internal.h
+@@ -1821,12 +1821,10 @@ typedef ImBitArray<ImGuiKey_NamedKey_COUNT, -ImGuiKey_NamedKey_BEGIN> ImBitArray
+ #define ImGuiKey_NavKeyboardTweakFast ImGuiMod_Shift
+ #define ImGuiKey_NavGamepadTweakSlow ImGuiKey_GamepadL1
+ #define ImGuiKey_NavGamepadTweakFast ImGuiKey_GamepadR1
+-#ifndef __SWITCH__
+ #define ImGuiKey_NavGamepadActivate (g.IO.ConfigNavSwapGamepadButtons ? ImGuiKey_GamepadFaceRight : ImGuiKey_GamepadFaceDown)
+ #define ImGuiKey_NavGamepadCancel (g.IO.ConfigNavSwapGamepadButtons ? ImGuiKey_GamepadFaceDown : ImGuiKey_GamepadFaceRight)
+ #define ImGuiKey_NavGamepadMenu ImGuiKey_GamepadFaceLeft
+ #define ImGuiKey_NavGamepadInput ImGuiKey_GamepadFaceUp
+-#endif
+ 
+ enum ImGuiInputEventType {
+     ImGuiInputEventType_None = 0,
+-- 
+2.52.0
+
