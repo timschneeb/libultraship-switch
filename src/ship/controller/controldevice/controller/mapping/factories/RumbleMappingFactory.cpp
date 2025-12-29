@@ -45,7 +45,7 @@ std::shared_ptr<ControllerRumbleMapping> RumbleMappingFactory::CreateRumbleMappi
     std::shared_ptr<ControllerRumbleMapping> mapping = nullptr;
 
 #ifdef __SWITCH__
-    return nullptr; // TODO: check if this is still necessary
+    return nullptr; // TODO:(Switch) implement rumble
 #endif
 
     for (auto [instanceId, gamepad] :
