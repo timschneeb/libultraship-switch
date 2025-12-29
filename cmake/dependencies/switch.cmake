@@ -39,6 +39,7 @@ if (NOT ${libzip_FOUND})
     set(BUILD_DOC OFF)
     set(BUILD_OSSFUZZ OFF)
     set(BUILD_SHARED_LIBS OFF)
+    set(ENABLE_ZSTD OFF)
     FetchContent_Declare(
             libzip
             GIT_REPOSITORY https://github.com/nih-at/libzip.git
