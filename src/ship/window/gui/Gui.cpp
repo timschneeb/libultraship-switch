@@ -132,6 +132,7 @@ void Gui::Init(GuiWindowInitData windowImpl) {
                                                           &iconsConfig, sIconsRanges);
 
 #ifdef __SWITCH__
+    Ship::Switch::CreateKeyboard();
     Ship::Switch::ImGuiSetupFont(mImGuiIo->Fonts);
 #endif
 
