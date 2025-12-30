@@ -126,7 +126,7 @@ void Ship::Switch::GetDisplaySize(int* width, int* height) {
 }
 
 void Ship::Switch::ApplyOverclock(void) {
-    SwitchProfiles perfMode = (SwitchProfiles)CVarGetInteger("SwitchPerfMode", (int)Ship::MAXIMUM);
+    SwitchProfiles perfMode = (SwitchProfiles)CVarGetInteger(CVAR_SWITCH_PERF_MODE, (int)Ship::MAXIMUM);
 
     if (perfMode >= 0 && perfMode <= Ship::POWERSAVINGM3) {
         if (hosversionBefore(8, 0, 0)) {
