@@ -1,4 +1,4 @@
-include(../cmake/cvars.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/cvars.cmake)
 
 add_library(libultraship STATIC)
 set_target_properties(libultraship PROPERTIES PREFIX "")
@@ -15,97 +15,26 @@ use_props(${PROJECT_NAME} "${CMAKE_CONFIGURATION_TYPES}" "${DEFAULT_CXX_PROPS}")
 endif()
 
 #=================== Top-Level ===================
+configure_file( ${CMAKE_CURRENT_SOURCE_DIR}/ship/install_config.h.in ${CMAKE_CURRENT_BINARY_DIR}/ship/install_config.h @ONLY)
 
-configure_file( ${CMAKE_CURRENT_SOURCE_DIR}/install_config.h.in ${CMAKE_CURRENT_BINARY_DIR}/install_config.h @ONLY)
+#=================== Fast ===================
 
-file(GLOB Source_Files__TopLevel RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "*.h" "*.cpp")
+add_subdirectory("fast")
 
-source_group("" FILES ${Source_Files__TopLevel})
-target_sources(libultraship PRIVATE ${Source_Files__TopLevel})
+#=================== LUS ===================
 
-#=================== Audio ===================
+add_subdirectory("libultraship")
 
-file(GLOB Source_Files__Audio RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "audio/*.h" "audio/*.cpp")
+#=================== Ship ===================
 
-if (NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    list(FILTER Source_Files__Audio EXCLUDE REGEX "audio/WasapiAudioPlayer.*")
-endif()
-
-source_group("audio" FILES ${Source_Files__Audio})
-target_sources(libultraship PRIVATE ${Source_Files__Audio})
-
-#=================== Controller ===================
-
-file(GLOB_RECURSE Source_Files__Controller RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "controller/*.h" "controller/*.cpp")
-
-source_group("controller" FILES ${Source_Files__Controller})
-target_sources(libultraship PRIVATE ${Source_Files__Controller})
-
-#=================== Config ===================
-
-file(GLOB Source_Files__Config RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "config/*.h" "config/*.cpp")
-
-source_group("config" FILES ${Source_Files__Config})
-target_sources(libultraship PRIVATE ${Source_Files__Config})
-
-#=================== Public ===================
-
-source_group("public")
-
-file(GLOB Source_Files__Public__Libultra RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "public/libultra/*.h" "public/libultra/*.cpp")
-
-source_group("public/libultra" FILES ${Source_Files__Public__Libultra})
-
-file(GLOB Source_Files__Public__Bridge RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "public/bridge/*.h" "public/bridge/*.cpp")
-
-source_group("public/bridge" FILES ${Source_Files__Public__Bridge})
-target_sources(libultraship PRIVATE ${Source_Files__Public__Libultra} ${Source_Files__Public__Bridge})
-
-#=================== Debug ===================
-
-file(GLOB Source_Files__Debug RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "debug/*.h" "debug/*.cpp")
-
-source_group("debug" FILES ${Source_Files__Debug})
-target_sources(libultraship PRIVATE ${Source_Files__Debug})
-
-#=================== Log ===================
-
-file(GLOB Source_Files__Log RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "log/*.h" "log/*.cpp")
-
-source_group("log" FILES ${Source_Files__Log})
-
-target_sources(libultraship PRIVATE ${Source_Files__Log} ${Source_Files__Log__SPDLog})
-
-#=================== Window ===================
-
-file(GLOB Source_Files__Window RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "window/*.h" "window/*.cpp")
-
-source_group("window" FILES ${Source_Files__Window})
-target_sources(libultraship PRIVATE ${Source_Files__Window})
-
-#=================== Gui ===================
-
-file(GLOB_RECURSE Source_Files__Window__Gui RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "window/gui/*.h" "window/gui/*.cpp")
-
-source_group("window/gui" FILES ${Source_Files__Window__Gui})
-target_sources(libultraship PRIVATE ${Source_Files__Window__Gui})
-
-#=================== Utils ===================
-
-file(GLOB_RECURSE Source_Files__Utils RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "utils/*.h" "utils/*.cpp" "utils/*.c")
+add_subdirectory("ship")
 
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
-    list(APPEND Source_Files__Utils ${CMAKE_CURRENT_SOURCE_DIR}/utils/AppleFolderManager.mm)
-    set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/utils/AppleFolderManager.mm PROPERTIES COMPILE_FLAGS -fno-objc-arc)
-else()
-    list(REMOVE_ITEM Header_Files__include ${CMAKE_CURRENT_SOURCE_DIR}/utils/AppleFolderManager.h)
+    set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/ship/utils/AppleFolderManager.mm PROPERTIES COMPILE_FLAGS -fno-objc-arc)
 endif()
 
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    list(APPEND Source_Files__Utils ${CMAKE_CURRENT_SOURCE_DIR}/utils/macUtils.mm)
-    set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/utils/macUtils.mm PROPERTIES COMPILE_FLAGS -fno-objc-arc)
-else()
-    list(REMOVE_ITEM Header_Files__include ${CMAKE_CURRENT_SOURCE_DIR}/utils/macUtils.h)
+    set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/ship/utils/macUtils.mm PROPERTIES COMPILE_FLAGS -fno-objc-arc)
 endif()
 
 source_group("utils" FILES ${Source_Files__Utils})
@@ -171,13 +100,13 @@ target_sources(libultraship PRIVATE ${Source_Files__Graphic_Debug})
 #=================== Packages & Includes ===================
 
 target_include_directories(libultraship
-    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../extern ${CMAKE_CURRENT_BINARY_DIR} $<$<BOOL:${GFX_DEBUG_DISASSEMBLER}>:${CMAKE_CURRENT_SOURCE_DIR}/../../ZAPDTR/lib/libgfxd>
-        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/../extern/spdlog/include/ ${CMAKE_CURRENT_SOURCE_DIR} ${INCLUDE_DIR} ${ADDITIONAL_LIB_INCLUDES}
+    PRIVATE ${CMAKE_CURRENT_BINARY_DIR}
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${INCLUDE_DIR} ${ADDITIONAL_LIB_INCLUDES}
 )
 
 #=================== Linking ===================
 if(INCLUDE_MPQ_SUPPORT)
-    if (NOT CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND NOT CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
+    if (NOT CMAKE_SYSTEM_NAME STREQUAL "Windows" AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
         target_link_libraries(libultraship PUBLIC "$<LINK_LIBRARY:WHOLE_ARCHIVE,storm>")
     else()
         target_link_libraries(libultraship PUBLIC storm)
@@ -185,7 +114,7 @@ if(INCLUDE_MPQ_SUPPORT)
 endif()
 
 target_link_libraries(libultraship
-    PUBLIC ImGui tinyxml2
+    PUBLIC ImGui
 )
 
 target_link_libraries(libultraship PRIVATE stb)
@@ -255,12 +184,25 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
     )
 endif()
 
+set(SPDLOG_LEVEL_TRACE 0)
+set(SPDLOG_LEVEL_DEBUG 1)
+set(SPDLOG_LEVEL_INFO 2)
+set(SPDLOG_LEVEL_WARN 3)
+set(SPDLOG_LEVEL_ERROR 4)
+set(SPDLOG_LEVEL_CRITICAL 5)
+set(SPDLOG_LEVEL_OFF 6)
+set(LOG_LEVELS "SPDLOG_LEVEL_TRACE;SPDLOG_LEVEL_DEBUG;SPDLOG_LEVEL_INFO;SPDLOG_LEVEL_WARN;SPDLOG_LEVEL_ERROR;SPDLOG_LEVEL_CRITICAL;SPDLOG_LEVEL_OFF")
+set(SPDLOG_MIN_CUTOFF SPDLOG_LEVEL_TRACE CACHE STRING "The minimum log level that will be available to a build. Can be overridden in cmake or in InitLogging")
+set_property(CACHE SPDLOG_MIN_CUTOFF PROPERTY STRINGS ${LOG_LEVELS})
+if(NOT SPDLOG_MIN_CUTOFF IN_LIST LOG_LEVELS)
+    message(FATAL_ERROR "SPDLOG_MIN_CUTOFF must be one of ${LOG_LEVELS}")
+endif()
+
 if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
     target_compile_definitions(libultraship PRIVATE
         $<$<CONFIG:Debug>:_DEBUG>
         $<$<NOT:$<CONFIG:Debug>>:NDEBUG>
-        $<$<CONFIG:Debug>:SPDLOG_ACTIVE_LEVEL=0>
-        $<$<NOT:$<CONFIG:Debug>>:SPDLOG_ACTIVE_LEVEL=1>
+        SPDLOG_ACTIVE_LEVEL=${SPDLOG_MIN_CUTOFF}
         __IOS__
     )
 
@@ -289,8 +231,7 @@ else()
         ENABLE_OPENGL
         $<$<CONFIG:Debug>:_DEBUG>
         $<$<NOT:$<CONFIG:Debug>>:NDEBUG>
-        $<$<CONFIG:Debug>:SPDLOG_ACTIVE_LEVEL=0>
-        $<$<NOT:$<CONFIG:Debug>>:SPDLOG_ACTIVE_LEVEL=1>
+        SPDLOG_ACTIVE_LEVEL=${SPDLOG_MIN_CUTOFF}
         $<$<BOOL:${USE_OPENGLES}>:USE_OPENGLES>
         $<$<BOOL:${GFX_DEBUG_DISASSEMBLER}>:GFX_DEBUG_DISASSEMBLER>
     )
@@ -342,3 +283,4 @@ if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU|Clang")
     )
     endif()
 endif()
+
