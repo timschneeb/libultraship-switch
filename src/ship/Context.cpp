@@ -231,6 +231,7 @@ bool Context::InitResourceManager(const std::vector<std::string>& archivePaths,
         // We need this exit to close the app when we dismiss the dialog
         exit(0);
 #endif
+#endif
         return false;
     }
 #ifdef __SWITCH__

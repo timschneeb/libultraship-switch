@@ -1,8 +1,4 @@
-<<<<<<<< HEAD:src/config/ConfigVersion.cpp
-#include "ConfigVersion.h"
-========
 #include "ship/config/Config.h"
->>>>>>>> kenix/main:src/ship/config/Config.cpp
 
 #include <fstream>
 #include <string>
