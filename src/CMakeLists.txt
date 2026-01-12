@@ -44,14 +44,14 @@ target_sources(libultraship PRIVATE ${Source_Files__Utils})
 
 if (CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
     set(Source_Files__Port
-            ${CMAKE_CURRENT_SOURCE_DIR}/port/switch/SwitchImpl.h
-            ${CMAKE_CURRENT_SOURCE_DIR}/port/switch/SwitchImpl.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/port/switch/SwitchPerformanceProfiles.h
+            ${CMAKE_CURRENT_SOURCE_DIR}/ship/port/switch/SwitchImpl.h
+            ${CMAKE_CURRENT_SOURCE_DIR}/ship/port/switch/SwitchImpl.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/ship/port/switch/SwitchPerformanceProfiles.h
     )
 elseif (CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set(Source_Files__Port
-        ${CMAKE_CURRENT_SOURCE_DIR}/port/mobile/MobileImpl.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/port/mobile/MobileImpl.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/ship/port/mobile/MobileImpl.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/ship/port/mobile/MobileImpl.cpp
     )
 endif()
 
