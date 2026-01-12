@@ -35,7 +35,7 @@
 #include <SDL2/SDL.h>
 #include <switch.h>
 #include <glad/glad.h>
-#include "port/switch/SwitchImpl.h"
+#include "ship/port/switch/SwitchImpl.h"
 #else
 #include <SDL2/SDL.h>
 #define GL_GLEXT_PROTOTYPES 1

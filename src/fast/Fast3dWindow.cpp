@@ -14,7 +14,7 @@
 #include "fast/backends/gfx_window_manager_api.h"
 
 #ifdef __SWITCH__
-#include "port/switch/SwitchImpl.h"
+#include "ship/port/switch/SwitchImpl.h"
 #endif
 
 #include <fstream>
