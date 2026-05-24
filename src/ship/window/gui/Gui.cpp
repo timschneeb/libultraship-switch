@@ -16,41 +16,8 @@
 #include "ship/window/gui/resource/GuiTextureFactory.h"
 #include "ship/window/gui/resource/GuiTexture.h"
 
-#include "libultraship/window/gui/GfxDebuggerWindow.h"
-#include "fast/Fast3dWindow.h"
-#ifdef __APPLE__
-#include <SDL_hints.h>
-#include <SDL_video.h>
-
-#include "fast/backends/gfx_metal.h"
-#include <imgui_impl_metal.h>
-#include <imgui_impl_sdl2.h>
-#else
-#include <SDL2/SDL_hints.h>
-#include <SDL2/SDL_video.h>
-#endif
-
 #ifdef __SWITCH__
 #include "ship/port/switch/SwitchImpl.h"
-#endif
-
-#if defined(__ANDROID__) || defined(__IOS__)
-#include "ship/port/mobile/MobileImpl.h"
-#endif
-
-#ifdef ENABLE_OPENGL
-#include <imgui_impl_opengl3.h>
-#include <imgui_impl_sdl2.h>
-
-#endif
-
-#if defined(ENABLE_DX11) || defined(ENABLE_DX12)
-#include <imgui_impl_dx11.h>
-#include <imgui_impl_win32.h>
-
-// NOLINTNEXTLINE
-IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
-
 #endif
 
 namespace Ship {
@@ -106,6 +73,7 @@ void Gui::Init() {
     iconsConfig.GlyphMinAdvanceX = iconFontSize;
     mImGuiIo->Fonts->AddFontFromMemoryCompressedBase85TTF(fontawesome_compressed_data_base85, iconFontSize,
                                                           &iconsConfig, sIconsRanges);
+
 #ifdef __SWITCH__
     Ship::Switch::CreateKeyboard();
     Ship::Switch::ImGuiSetupFont(mImGuiIo->Fonts);
@@ -146,7 +114,6 @@ void Gui::Init() {
 #ifdef __SWITCH__
     ImGui::GetStyle().ScaleAllSizes(2);
 #endif
-    mInterpreter = dynamic_pointer_cast<Fast::Fast3dWindow>(Context::GetInstance()->GetWindow())->GetInterpreterWeak();
     ImGuiBackendInit();
 #ifdef __SWITCH__
     Ship::Switch::ApplyOverclock();
@@ -172,50 +139,7 @@ void Gui::ImGuiBackendShutdown() {
 }
 
 bool Gui::SupportsViewports() {
-#ifdef __linux__
-    const char* currentDesktop = std::getenv("XDG_CURRENT_DESKTOP");
-    if (currentDesktop && std::string(currentDesktop) == "gamescope") {
-        return false;
-    }
-#endif
-#ifdef __SWITCH__
     return false;
-#endif
-#if defined(__ANDROID__) || defined(__IOS__)
-    return false;
-#endif
-
-    switch (Context::GetInstance()->GetWindow()->GetWindowBackend()) {
-        case WindowBackend::FAST3D_DXGI_DX11:
-            return true;
-        case WindowBackend::FAST3D_SDL_OPENGL:
-        case WindowBackend::FAST3D_SDL_METAL:
-            return true;
-        default:
-            return false;
-    }
-}
-
-void Gui::HandleWindowEvents(WindowEvent event) {
-    switch (Context::GetInstance()->GetWindow()->GetWindowBackend()) {
-        case WindowBackend::FAST3D_SDL_OPENGL:
-        case WindowBackend::FAST3D_SDL_METAL:
-            ImGui_ImplSDL2_ProcessEvent(static_cast<const SDL_Event*>(event.Sdl.Event));
-#ifdef __SWITCH__
-            Switch::ImGuiProcessEvent(mImGuiIo->WantTextInput);
-#elif defined(__ANDROID__) || defined(__IOS__)
-            Mobile::ImGuiProcessEvent(mImGuiIo->WantTextInput);
-#endif
-            break;
-#ifdef ENABLE_DX11
-        case WindowBackend::FAST3D_DXGI_DX11:
-            ImGui_ImplWin32_WndProcHandler(static_cast<HWND>(event.Win32.Handle), event.Win32.Msg, event.Win32.Param1,
-                                           event.Win32.Param2);
-            break;
-#endif
-        default:
-            break;
-    }
 }
 
 bool Gui::GamepadNavigationEnabled() {
