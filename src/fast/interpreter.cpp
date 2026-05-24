@@ -1455,9 +1455,9 @@ void Interpreter::GfxSpPopMatrix(uint32_t count) {
 
 float Interpreter::AdjXForAspectRatio(float x) const {
     // Skip widescreen adjustment for fixed-size off-screen FBs (HUD elements,
-    // small capture buffers). But resizable FBs (resize=true) are capturing
-    // the main scene and should match the window's aspect ratio.
-    if (mFbActive && mActiveFrameBuffer != mFrameBuffers.end() && !mActiveFrameBuffer->second.resize) {
+    // small capture buffers), or those which specify a fixed aspect ratio.
+    if (mFbActive && mActiveFrameBuffer != mFrameBuffers.end() &&
+        (!mActiveFrameBuffer->second.resize || mActiveFrameBuffer->second.forceFixedAspect)) {
         return x;
     } else {
         return x * (4.0f / 3.0f) / ((float)mCurDimensions.width / (float)mCurDimensions.height);
@@ -4853,6 +4853,14 @@ GfxRenderingAPI* Interpreter::GetCurrentRenderingAPI() {
     return mRapi;
 }
 
+void Interpreter::SetGfxDebugger(std::shared_ptr<GfxDebugger> debugger) {
+    mGfxDebugger = std::move(debugger);
+}
+
+std::shared_ptr<GfxDebugger> Interpreter::GetGfxDebugger() const {
+    return mGfxDebugger;
+}
+
 void Interpreter::HandleWindowEvents() {
     mWapi->HandleEvents();
 }
@@ -4984,7 +4992,7 @@ void Interpreter::Run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_r
     mRenderingState.viewport = {};
     mRenderingState.scissor = {};
 
-    auto dbg = Ship::Context::GetInstance()->GetGfxDebugger();
+    auto dbg = mGfxDebugger;
     g_exec_stack.start((F3DGfx*)commands);
     while (!g_exec_stack.cmd_stack.empty()) {
         auto cmd = g_exec_stack.cmd_stack.top();
@@ -5056,7 +5064,7 @@ void Interpreter::SetMaxFrameLatency(int latency) {
 }
 
 int Interpreter::CreateFrameBuffer(uint32_t width, uint32_t height, uint32_t native_width, uint32_t native_height,
-                                   uint8_t resize) {
+                                   uint8_t resize, bool forceFixedAspect) {
     uint32_t orig_width = width, orig_height = height;
     if (resize) {
         AdjustWidthHeightForScale(width, height, native_width, native_height);
@@ -5066,7 +5074,7 @@ int Interpreter::CreateFrameBuffer(uint32_t width, uint32_t height, uint32_t nat
     mRapi->UpdateFramebufferParameters(fb, width, height, 1, true, true, true, true);
 
     mFrameBuffers[fb] = {
-        orig_width, orig_height, width, height, native_width, native_height, static_cast<bool>(resize)
+        orig_width, orig_height, width, height, native_width, native_height, static_cast<bool>(resize), forceFixedAspect
     };
     return fb;
 }
@@ -5315,8 +5323,9 @@ void gfx_cc_get_features(uint64_t shader_id0, uint64_t shader_id1, struct CCFeat
 }
 
 extern "C" int gfx_create_framebuffer(uint32_t width, uint32_t height, uint32_t native_width, uint32_t native_height,
-                                      uint8_t resize) {
-    return Fast::mInstance.lock().get()->CreateFrameBuffer(width, height, native_width, native_height, resize);
+                                      uint8_t resize, bool forceFixedAspect) {
+    return Fast::mInstance.lock().get()->CreateFrameBuffer(width, height, native_width, native_height, resize,
+                                                           forceFixedAspect);
 }
 
 extern "C" void gfx_texture_cache_clear() {
