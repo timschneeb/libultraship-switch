@@ -32,16 +32,19 @@
 
 
 namespace Ship {
-std::weak_ptr<Context> Context::mContext;
+std::unique_ptr<Context> Context::mContext;
 
-std::shared_ptr<Context> Context::GetInstance() {
-    return mContext.lock();
+Context* Context::GetRawInstance() {
+    return mContext.get();
+}
+
+void Context::DestroyInstance() {
+    mContext = nullptr;
 }
 
 Context::~Context() {
     SPDLOG_TRACE("destruct context");
     GetWindow()->SaveWindowToConfig();
-
     // Explicitly destructing everything so that logging is done last.
     mAudio = nullptr;
     mWindow = nullptr;
@@ -60,19 +63,22 @@ Context::~Context() {
 #endif
     GetConfig()->Save();
     mConfig = nullptr;
-    spdlog::shutdown();
+    mLogger->flush();
+    mLogger = nullptr;
+#ifndef _DEBUG
+    mLogThreadPool = nullptr;
+#endif
 }
 
-std::shared_ptr<Context>
-Context::CreateInstance(const std::string& name, const std::string& shortName, const std::string& configFilePath,
-                        const std::vector<std::string>& archivePaths, const std::unordered_set<uint32_t>& validHashes,
-                        uint32_t reservedThreadCount, AudioSettings audioSettings, std::shared_ptr<Window> window,
-                        std::shared_ptr<ControlDeck> controlDeck) {
-    if (mContext.expired()) {
-        auto shared = std::make_shared<Context>(name, shortName, configFilePath);
-        mContext = shared;
-        if (shared->Init(archivePaths, validHashes, reservedThreadCount, audioSettings, window, controlDeck)) {
-            return shared;
+Context* Context::CreateInstance(const std::string& name, const std::string& shortName,
+                                 const std::string& configFilePath, const std::vector<std::string>& archivePaths,
+                                 const std::unordered_set<uint32_t>& validHashes, uint32_t reservedThreadCount,
+                                 AudioSettings audioSettings, std::shared_ptr<Window> window,
+                                 std::shared_ptr<ControlDeck> controlDeck) {
+    if (mContext == nullptr) {
+        mContext = std::make_unique<Context>(name, shortName, configFilePath);
+        if (mContext->Init(archivePaths, validHashes, reservedThreadCount, audioSettings, window, controlDeck)) {
+            return mContext.get();
         } else {
             SPDLOG_ERROR("Failed to initialize");
             return nullptr;
@@ -81,20 +87,19 @@ Context::CreateInstance(const std::string& name, const std::string& shortName, c
 
     SPDLOG_DEBUG("Trying to create a context when it already exists. Returning existing.");
 
-    return GetInstance();
+    return GetRawInstance();
 }
 
-std::shared_ptr<Context> Context::CreateUninitializedInstance(const std::string& name, const std::string& shortName,
-                                                              const std::string& configFilePath) {
-    if (mContext.expired()) {
-        auto shared = std::make_shared<Context>(name, shortName, configFilePath);
-        mContext = shared;
-        return shared;
+Context* Context::CreateUninitializedInstance(const std::string& name, const std::string& shortName,
+                                              const std::string& configFilePath) {
+    if (mContext == nullptr) {
+        mContext = std::make_unique<Context>(name, shortName, configFilePath);
+        return mContext.get();
     }
 
     SPDLOG_DEBUG("Trying to create an uninitialized context when it already exists. Returning existing.");
 
-    return GetInstance();
+    return GetRawInstance();
 }
 
 Context::Context(std::string name, std::string shortName, std::string configFilePath)
@@ -158,7 +163,7 @@ bool Context::InitLogging(spdlog::level::level_enum debugBuildLogLevel,
         std::wcin.clear();
 #endif
         auto systemConsoleSink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-        // systemConsoleSink->set_level(spdlog::level::trace);
+        systemConsoleSink->set_level(spdlog::level::trace);
         sinks.push_back(systemConsoleSink);
 #endif
 
@@ -170,7 +175,8 @@ bool Context::InitLogging(spdlog::level::level_enum debugBuildLogLevel,
         GetLogger()->set_level(debugBuildLogLevel);
         GetLogger()->flush_on(spdlog::level::trace);
 #else
-        mLogger = std::make_shared<spdlog::async_logger>(GetName(), sinks.begin(), sinks.end(), spdlog::thread_pool(),
+        mLogThreadPool = std::make_shared<spdlog::details::thread_pool>(8192, 1);
+        mLogger = std::make_shared<spdlog::async_logger>(GetName(), sinks.begin(), sinks.end(), mLogThreadPool,
                                                          spdlog::async_overflow_policy::block);
         GetLogger()->set_level(releaseBuildLogLevel);
         GetLogger()->flush_on(spdlog::level::info);
@@ -234,10 +240,10 @@ bool Context::InitResourceManager(const std::vector<std::string>& archivePaths,
         paths.push_back(mMainPath);
         paths.push_back(mPatchesPath);
 
-        mResourceManager = std::make_shared<ResourceManager>();
+        mResourceManager = std::make_unique<ResourceManager>();
         GetResourceManager()->Init(paths, validHashes, reservedThreadCount);
     } else {
-        mResourceManager = std::make_shared<ResourceManager>();
+        mResourceManager = std::make_unique<ResourceManager>();
         GetResourceManager()->Init(archivePaths, validHashes, reservedThreadCount);
     }
 

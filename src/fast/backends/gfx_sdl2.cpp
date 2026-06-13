@@ -1,6 +1,8 @@
+#if defined(ENABLE_OPENGL) || defined(__APPLE__)
+
 #include <stdio.h>
 
-#if defined(ENABLE_OPENGL) || defined(__APPLE__)
+#include "fast/Fast3dWindow.h"
 
 #ifdef __MINGW32__
 #define FOR_WINDOWS 1
@@ -245,11 +247,11 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
     }
     mFullScreen = on;
 #else
-    if (SDL_SetWindowFullscreen(
-            mWnd, on ? (Ship::Context::GetInstance()->GetConsoleVariables()->GetInteger(CVAR_SDL_WINDOWED_FULLSCREEN, 0)
-                            ? SDL_WINDOW_FULLSCREEN_DESKTOP
-                            : SDL_WINDOW_FULLSCREEN)
-                     : 0) >= 0) {
+    if (SDL_SetWindowFullscreen(mWnd, on ? (Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(
+                                                CVAR_SDL_WINDOWED_FULLSCREEN, 0)
+                                                ? SDL_WINDOW_FULLSCREEN_DESKTOP
+                                                : SDL_WINDOW_FULLSCREEN)
+                                         : 0) >= 0) {
         mFullScreen = on;
     } else {
         SPDLOG_ERROR("Failed to switch from or to fullscreen mode.");
@@ -258,7 +260,7 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
 #endif
 
     if (!on) {
-        auto conf = Ship::Context::GetInstance()->GetConfig();
+        auto conf = Ship::Context::GetRawInstance()->GetConfig();
         mWindowWidth = conf->GetInt("Window.Width", 640);
         mWindowHeight = conf->GetInt("Window.Height", 480);
         int32_t posX = conf->GetInt("Window.PositionX", 100);
@@ -435,6 +437,7 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
         }
 #endif
         window_impl.Opengl = { mWnd, mCtx };
+        window_impl.Backend = WindowBackend::FAST3D_SDL_OPENGL;
     } else {
         uint32_t flags = SDL_RENDERER_ACCELERATED;
         if (mVsyncEnabled) {
@@ -452,9 +455,11 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
 
         SDL_GetRendererOutputSize(mRenderer, &mWindowWidth, &mWindowHeight);
         window_impl.Metal = { mWnd, mRenderer };
+        window_impl.Backend = WindowBackend::FAST3D_SDL_METAL;
     }
 
-    std::dynamic_pointer_cast<Fast::Fast3dGui>(Ship::Context::GetInstance()->GetWindow()->GetGui())->Init(window_impl);
+    std::dynamic_pointer_cast<Fast::Fast3dGui>(Ship::Context::GetRawInstance()->GetWindow()->GetGui())
+        ->Init(window_impl);
 
     for (size_t i = 0; i < std::size(lus_to_sdl_table); i++) {
         mSdlToLusTable[lus_to_sdl_table[i]] = i;
@@ -620,7 +625,7 @@ void GfxWindowBackendSDL2::OnMouseButtonUp(int btn) const {
 void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
     Fast::WindowEvent event_impl;
     event_impl.Sdl = { &event };
-    auto gui = Ship::Context::GetInstance()->GetWindow()->GetGui();
+    auto gui = Ship::Context::GetRawInstance()->GetWindow()->GetGui();
     auto fast3dGui = std::dynamic_pointer_cast<Fast::Fast3dGui>(gui);
     if (fast3dGui) {
         fast3dGui->HandleWindowEvents(event_impl);
@@ -672,7 +677,7 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
             }
             break;
         case SDL_DROPFILE:
-            Ship::Context::GetInstance()->GetFileDropMgr()->SetDroppedFile(event.drop.file);
+            Ship::Context::GetRawInstance()->GetFileDropMgr()->SetDroppedFile(event.drop.file);
             break;
         case SDL_QUIT:
             Close();
@@ -755,7 +760,7 @@ void GfxWindowBackendSDL2::SyncFramerateWithTime() const {
 }
 
 void GfxWindowBackendSDL2::SwapBuffersBegin() {
-    bool nextVsyncEnabled = Ship::Context::GetInstance()->GetConsoleVariables()->GetInteger(CVAR_VSYNC_ENABLED, 1);
+    bool nextVsyncEnabled = Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(CVAR_VSYNC_ENABLED, 1);
 
     if (mVsyncEnabled != nextVsyncEnabled) {
         mVsyncEnabled = nextVsyncEnabled;

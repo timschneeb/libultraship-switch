@@ -91,11 +91,11 @@ void Gui::Init() {
     mImGuiIo->LogFilename = mImGuiLogPath.c_str();
 
     if (SupportsViewports() &&
-        Ship::Context::GetInstance()->GetConsoleVariables()->GetInteger(CVAR_ENABLE_MULTI_VIEWPORTS, 1)) {
+        Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(CVAR_ENABLE_MULTI_VIEWPORTS, 1)) {
         mImGuiIo->ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
     }
 
-    if (Ship::Context::GetInstance()->GetConsoleVariables()->GetInteger(CVAR_IMGUI_CONTROLLER_NAV, 0) &&
+    if (Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(CVAR_IMGUI_CONTROLLER_NAV, 0) &&
         GetMenuOrMenubarVisible()) {
         mImGuiIo->ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     } else {
@@ -106,7 +106,7 @@ void Gui::Init() {
     GetGuiWindow("Console")->Init();
     GetGameOverlay()->Init();
 
-    Context::GetInstance()->GetResourceManager()->GetResourceLoader()->RegisterResourceFactory(
+    Context::GetRawInstance()->GetResourceManager()->GetResourceLoader()->RegisterResourceFactory(
         std::make_shared<ResourceFactoryBinaryGuiTextureV0>(), RESOURCE_FORMAT_BINARY, "GuiTexture",
         static_cast<uint32_t>(RESOURCE_TYPE_GUI_TEXTURE), 0);
 
@@ -151,7 +151,7 @@ void Gui::BlockGamepadNavigation() {
 }
 
 void Gui::UnblockGamepadNavigation() {
-    if (Ship::Context::GetInstance()->GetConsoleVariables()->GetInteger(CVAR_IMGUI_CONTROLLER_NAV, 0) &&
+    if (Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(CVAR_IMGUI_CONTROLLER_NAV, 0) &&
         GetMenuOrMenubarVisible()) {
         mImGuiIo->ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     }
@@ -177,8 +177,8 @@ void Gui::ImGuiWMNewFrame() {
 }
 
 void Gui::DrawMenu() {
-    const std::shared_ptr<Window> wnd = Context::GetInstance()->GetWindow();
-    const std::shared_ptr<Config> conf = Context::GetInstance()->GetConfig();
+    const std::shared_ptr<Window> wnd = Context::GetRawInstance()->GetWindow();
+    const std::shared_ptr<Config> conf = Context::GetRawInstance()->GetConfig();
 
     ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBackground |
                                    ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove |
@@ -217,15 +217,15 @@ void Gui::DrawMenu() {
 
     if (ImGui::IsKeyPressed(TOGGLE_BTN, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
         (ImGui::IsKeyPressed(TOGGLE_PAD_BTN, false) &&
-         Ship::Context::GetInstance()->GetConsoleVariables()->GetInteger(CVAR_IMGUI_CONTROLLER_NAV, 0))) {
+         Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(CVAR_IMGUI_CONTROLLER_NAV, 0))) {
         if ((ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(TOGGLE_PAD_BTN, false)) && GetMenu()) {
             GetMenu()->ToggleVisibility();
         } else if ((ImGui::IsKeyPressed(TOGGLE_BTN, false) || ImGui::IsKeyPressed(TOGGLE_PAD_BTN, false)) &&
                    GetMenuBar()) {
             GetMenuBar()->ToggleVisibility();
         }
-        Ship::Context::GetInstance()->GetWindow()->GetMouseStateManager()->UpdateMouseCapture();
-        if (Ship::Context::GetInstance()->GetConsoleVariables()->GetInteger(CVAR_IMGUI_CONTROLLER_NAV, 0) &&
+        Ship::Context::GetRawInstance()->GetWindow()->GetMouseStateManager()->UpdateMouseCapture();
+        if (Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(CVAR_IMGUI_CONTROLLER_NAV, 0) &&
             GetMenuOrMenubarVisible()) {
             mImGuiIo->ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
         } else {
@@ -237,7 +237,7 @@ void Gui::DrawMenu() {
     if ((ImGui::IsKeyDown(ImGuiKey_LeftCtrl) || ImGui::IsKeyDown(ImGuiKey_RightCtrl)) &&
         ImGui::IsKeyPressed(ImGuiKey_R, false)) {
         std::reinterpret_pointer_cast<ConsoleWindow>(
-            Context::GetInstance()->GetWindow()->GetGui()->GetGuiWindow("Console"))
+            Context::GetRawInstance()->GetWindow()->GetGui()->GetGuiWindow("Console"))
             ->Dispatch("reset");
     }
 
@@ -264,7 +264,7 @@ void Gui::HandleMouseCapture() {
     for (auto windowIter : ImGui::GetCurrentContext()->WindowsById.Data) {
         if (windowIter.key != GetMainGameWindowID() && windowIter.key != GetGameOverlay()->GetID()) {
             ImGuiWindow* window = (ImGuiWindow*)windowIter.val_p;
-            if (Context::GetInstance()->GetWindow()->IsMouseCaptured()) {
+            if (Context::GetRawInstance()->GetWindow()->IsMouseCaptured()) {
                 window->Flags |= flags;
             } else {
                 window->Flags &= ~(flags);
@@ -298,7 +298,7 @@ void Gui::DrawFloatingWindows() {
 
 void Gui::CheckSaveCvars() {
     if (mNeedsConsoleVariableSave) {
-        Ship::Context::GetInstance()->GetConsoleVariables()->Save();
+        Ship::Context::GetRawInstance()->GetConsoleVariables()->Save();
         mNeedsConsoleVariableSave = false;
     }
 }
