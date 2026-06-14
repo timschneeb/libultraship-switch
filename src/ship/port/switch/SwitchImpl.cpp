@@ -203,7 +203,7 @@ static void on_applet_hook(AppletHookType hook, void* param) {
     }
 }
 
-void Ship::Switch::ShowErrorApplet(const char *format, ...) {
+void Ship::Switch::ShowErrorApplet(const char* format, ...) {
     ErrorSystemConfig errorConfig = {};
 
     // Error applet can display up to 2048 bytes
@@ -256,9 +256,9 @@ void DetectAppletMode() {
 
 void Ship::Switch::ThrowMissingOTR(std::string otrPath) {
     Ship::Switch::ShowErrorApplet("You've launched the Ship without an OTR/O2R file.\n"
-                                        "Please relaunch making sure %s exists.\n\n"
-                                        "%s.",
-                                        otrPath.c_str(), RandomTexts[rand() % 25]);
+                                  "Please relaunch making sure %s exists.\n\n"
+                                  "%s.",
+                                  otrPath.c_str(), RandomTexts[rand() % 25]);
     exit(2);
 }
 #endif

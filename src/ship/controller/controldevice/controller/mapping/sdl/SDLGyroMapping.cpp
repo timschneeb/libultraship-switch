@@ -78,7 +78,8 @@ void SDLGyroMapping::UpdatePad(float& x, float& y) {
 #else
     /*
      * Skip this check on Switch since it will make the gyro preview non-functional
-     * when the menu gamepad navigation is on. It's not a big deal to not block gyro while in a menu as it is used rarely anyways.
+     * when the menu gamepad navigation is on. It's not a big deal to not block gyro while in a menu as it is used
+     * rarely anyways.
      */
     if (Context::GetRawInstance()->GetControlDeck()->GamepadGameInputBlocked()) {
         x = 0;

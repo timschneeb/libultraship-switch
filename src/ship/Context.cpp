@@ -30,7 +30,6 @@
 #include "ship/port/switch/SwitchImpl.h"
 #endif
 
-
 namespace Ship {
 std::unique_ptr<Context> Context::mContext;
 

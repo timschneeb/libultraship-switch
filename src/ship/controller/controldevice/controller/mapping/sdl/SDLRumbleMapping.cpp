@@ -19,8 +19,8 @@ SDLRumbleMapping::SDLRumbleMapping(uint8_t portIndex, uint8_t lowFrequencyIntens
 
 void SDLRumbleMapping::StartRumble() {
 #ifdef __SWITCH__
-    SwitchController::GetInstance().SendRumble(
-        mPortIndex, mLowFrequencyIntensityPercentage / 100.0f, mHighFrequencyIntensityPercentage / 100.0f);
+    SwitchController::GetInstance().SendRumble(mPortIndex, mLowFrequencyIntensityPercentage / 100.0f,
+                                               mHighFrequencyIntensityPercentage / 100.0f);
     return;
 #endif
 
