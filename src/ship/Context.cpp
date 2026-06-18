@@ -542,6 +542,17 @@ std::string Context::GetAppDirectoryPath(const std::string& appName) {
     return std::string(home) + "/Documents";
 #endif
 
+#ifdef __SWITCH__
+    char buf[256];
+    getcwd(buf, sizeof(buf));
+    const char* prefix = "sdmc:";
+    if (strncmp(buf, prefix, strlen(prefix)) == 0) {
+        // Trim path prefix
+        return std::string(buf + strlen(prefix));
+    }
+    return std::string(buf);
+#endif
+
 #if defined(__APPLE__)
     FolderManager foldermanager;
     if (char* fpath = std::getenv("SHIP_HOME")) {
