@@ -278,7 +278,7 @@ void Gui::StartFrame() {
     ImGuiBackendNewFrame();
     ImGuiWMNewFrame();
 #ifdef __SWITCH__
-    // Pump the inline software keyboard, then block menu navigation while it's on screen so controller input drives
+    // Pump the inline software keyboard, then block menu navigation while it's on-screen so controller input drives
     // the keyboard rather than the menu underneath.  Blocked every frame because the menu reasserts NavEnableGamepad
     // during its draw (after StartFrame), so a one-shot block would last a single frame.  Unblock once on release so
     // we don't stomp other navigation blockers while the keyboard is closed.

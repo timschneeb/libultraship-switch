@@ -24,11 +24,11 @@ class Switch {
     static void UpdateKeyboard();
     // Shows the inline software keyboard, seeded with initialText.
     // The typed string is streamed via callbacks, read with ConsumeKeyboardText.
-    static void ShowKeyboard(const std::string& initialText);
+    static void ShowKeyboard(ImGuiID owner, const std::string& initialText);
     static bool IsKeyboardActive();
     // Fills out the latest keyboard text once per change; returns false when nothing new.
     // Apply the result to the field and rebuild only when this returns true.
-    static bool ConsumeKeyboardText(std::string& out);
+    static bool ConsumeKeyboardText(ImGuiID owner, std::string& out);
     static bool IsRunning();
     static void GetDisplaySize(int* width, int* height);
     static void ApplyOverclock();

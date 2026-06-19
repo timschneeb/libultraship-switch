@@ -24,6 +24,7 @@ static bool sIsKeyboardActive = false;
 static std::string sKeyboardText;
 static std::string sKeyboardInitializeText;
 static bool sIsKeyboardTextChanged = false;
+static ImGuiID sKeyboardOwner = 0;
 
 HidsysUniquePadId uniquePadIds[8];
 
@@ -148,18 +149,18 @@ void Ship::Switch::UpdateKeyboard() {
     swkbdInlineUpdate(&sKeyboard, nullptr);
 }
 
-void Ship::Switch::ShowKeyboard(const std::string& initialText) {
+void Ship::Switch::ShowKeyboard(ImGuiID owner, const std::string& initialText) {
     if (!sIsKeyboardLaunched || sIsKeyboardActive) {
         return;
     }
 
+    sKeyboardOwner = owner;
     sKeyboardText = initialText;
     sKeyboardInitializeText = initialText;
     swkbdInlineSetInputText(&sKeyboard, initialText.c_str());
 
     SwkbdAppearArg appear = {};
     swkbdInlineMakeAppearArg(&appear, SwkbdType_Normal);
-    swkbdInlineAppearArgSetOkButtonText(&appear, "Search");
     swkbdInlineAppearArgSetStringLenMax(&appear, 255);
     swkbdInlineAppear(&sKeyboard, &appear);
 
@@ -172,8 +173,8 @@ bool Ship::Switch::IsKeyboardActive() {
 
 // Returns true and fills out with the latest keyboard text exactly once per change (typing, enter, or cancel-revert).
 // One-shot so it doesn't continually overwrite the filter and fight other edits.
-bool Ship::Switch::ConsumeKeyboardText(std::string& out) {
-    if (!sIsKeyboardTextChanged) {
+bool Ship::Switch::ConsumeKeyboardText(ImGuiID owner, std::string& out) {
+    if (!sIsKeyboardTextChanged || sKeyboardOwner != owner) {
         return false;
     }
 
