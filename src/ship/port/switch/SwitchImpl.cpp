@@ -109,9 +109,9 @@ static void OnKeyboardDecidedEnter(const char* str, SwkbdDecidedEnterArg*) {
 }
 
 static void OnKeyboardDecidedCancel() {
-    // The cancel button already disappears the keyboard; calling swkbdInlineDisappear again here corrupts the applet
-    // and breaks the next Appear.  Just revert and mark inactive.
-    sKeyboardText = sKeyboardInitializeText;
+    // Keep whatever the player left in the field -- including empty, after erasing everything.
+    // The cancel button already disappears the keyboard, so don't call Disappear here (it corrupts the applet and
+    // breaks the next Appear).
     sIsKeyboardTextChanged = true;
     sIsKeyboardActive = false;
 }
@@ -158,9 +158,11 @@ void Ship::Switch::ShowKeyboard(ImGuiID owner, const std::string& initialText) {
     sKeyboardText = initialText;
     sKeyboardInitializeText = initialText;
     swkbdInlineSetInputText(&sKeyboard, initialText.c_str());
+    // SetInputText doesn't move the caret, so place it at the end.
+    swkbdInlineSetCursorPos(&sKeyboard, static_cast<std::int32_t>(initialText.length()));
 
     SwkbdAppearArg appear = {};
-    swkbdInlineMakeAppearArg(&appear, SwkbdType_Normal);
+    swkbdInlineMakeAppearArg(&appear, SwkbdType_QWERTY);
     swkbdInlineAppearArgSetStringLenMax(&appear, 255);
     swkbdInlineAppear(&sKeyboard, &appear);
 
