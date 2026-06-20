@@ -26,9 +26,10 @@ class Switch {
     // The typed string is streamed via callbacks, read with ConsumeKeyboardText.
     static void ShowKeyboard(ImGuiID owner, const std::string& initialText);
     static bool IsKeyboardActive();
-    // Fills out the latest keyboard text once per change; returns false when nothing new.
-    // Apply the result to the field and rebuild only when this returns true.
-    static bool ConsumeKeyboardText(ImGuiID owner, std::string& out);
+    // Fills out the latest keyboard text once per change, but only for the owner that opened the current session;
+    // returns false otherwise.  If submitted is non-null, it is set to true when that change came from the player
+    // confirming (Enter), false otherwise.
+    static bool ConsumeKeyboardText(ImGuiID owner, std::string& out, bool* isSubmitted = nullptr);
     static bool IsRunning();
     static void GetDisplaySize(int* width, int* height);
     static void ApplyOverclock();

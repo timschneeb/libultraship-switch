@@ -22,8 +22,8 @@ static SwkbdInline sKeyboard;
 static bool sIsKeyboardLaunched = false;
 static bool sIsKeyboardActive = false;
 static std::string sKeyboardText;
-static std::string sKeyboardInitializeText;
 static bool sIsKeyboardTextChanged = false;
+static bool sIsKeyboardSubmitted = false;
 static ImGuiID sKeyboardOwner = 0;
 
 HidsysUniquePadId uniquePadIds[8];
@@ -104,6 +104,7 @@ static void OnKeyboardStringChanged(const char* str, SwkbdChangedStringArg*) {
 static void OnKeyboardDecidedEnter(const char* str, SwkbdDecidedEnterArg*) {
     sKeyboardText = str ? str : "";
     sIsKeyboardTextChanged = true;
+    sIsKeyboardSubmitted = true;
     swkbdInlineDisappear(&sKeyboard);
     sIsKeyboardActive = false;
 }
@@ -156,7 +157,7 @@ void Ship::Switch::ShowKeyboard(ImGuiID owner, const std::string& initialText) {
 
     sKeyboardOwner = owner;
     sKeyboardText = initialText;
-    sKeyboardInitializeText = initialText;
+    sIsKeyboardSubmitted = false;
     swkbdInlineSetInputText(&sKeyboard, initialText.c_str());
     // SetInputText doesn't move the caret, so place it at the end.
     swkbdInlineSetCursorPos(&sKeyboard, static_cast<std::int32_t>(initialText.length()));
@@ -175,13 +176,23 @@ bool Ship::Switch::IsKeyboardActive() {
 
 // Returns true and fills out with the latest keyboard text exactly once per change (typing, enter, or cancel-revert).
 // One-shot so it doesn't continually overwrite the filter and fight other edits.
-bool Ship::Switch::ConsumeKeyboardText(ImGuiID owner, std::string& out) {
+bool Ship::Switch::ConsumeKeyboardText(ImGuiID owner, std::string& out, bool* isSubmitted) {
     if (!sIsKeyboardTextChanged || sKeyboardOwner != owner) {
+        if (isSubmitted) {
+            *isSubmitted = false;
+        }
+
         return false;
     }
 
     sIsKeyboardTextChanged = false;
     out = sKeyboardText;
+
+    if (isSubmitted) {
+        *isSubmitted = sIsKeyboardSubmitted;
+    }
+
+    sIsKeyboardSubmitted = false;
     return true;
 }
 
