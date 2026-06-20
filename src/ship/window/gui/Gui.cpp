@@ -296,6 +296,17 @@ void Gui::StartFrame() {
     sWasKeyboardActive = isKeyboardActive;
 #endif
     ImGui::NewFrame();
+
+    /* Workaround: ImGui does not trigger the on-screen keyboard for activate events from controllers (text boxes).
+     * If PreferTweak is set on an element, we pretend to be using a keyboard to activate textboxes. */
+    {
+        ImGuiContext& g = *GImGui;
+        if (g.NavActivateId != 0 && g.NavInputSource == ImGuiInputSource_Gamepad &&
+            (g.NavActivateFlags & ImGuiActivateFlags_PreferTweak)) {
+            g.NavInputSource = ImGuiInputSource_Keyboard;
+        }
+    }
+
 }
 
 void Gui::EndFrame() {
