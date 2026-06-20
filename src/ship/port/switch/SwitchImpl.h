@@ -20,6 +20,7 @@ class Switch {
     static void Exit();
     static void ImGuiSetupFont(ImFontAtlas* fonts);
     static void ImGuiProcessEvent(bool wantsTextInput);
+    static void HandleInlineKeyboard();
     static void CreateKeyboard();
     // Pumps the inline keyboard applet; called once per frame.
     static void UpdateKeyboard();

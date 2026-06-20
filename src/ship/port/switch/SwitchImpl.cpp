@@ -17,10 +17,6 @@
 static AppletHookCookie applet_hook_cookie;
 static bool isRunning = true;
 static bool hasFocus = true;
-static bool isShowingVirtualKeyboard = false;
-
-static SwkbdConfig keyboard;
-static char kbBuffer[256] = { 0 };
 
 static SwkbdInline sKeyboard;
 static bool sIsKeyboardLaunched = false;
@@ -29,6 +25,9 @@ static std::string sKeyboardText;
 static bool sIsKeyboardTextChanged = false;
 static bool sIsKeyboardSubmitted = false;
 static ImGuiID sKeyboardOwner = 0;
+static int sKeyboardCursorPos = -1;
+static bool sIsCursorMoved = false;
+static int sPendingCursorPos = -1;
 
 HidsysUniquePadId uniquePadIds[8];
 
@@ -100,9 +99,15 @@ void Ship::Switch::ImGuiSetupFont(ImFontAtlas* fonts) {
     plExit();
 }
 
-static void OnKeyboardStringChanged(const char* str, SwkbdChangedStringArg*) {
+static void OnKeyboardStringChanged(const char* str, SwkbdChangedStringArg* arg) {
     sKeyboardText = str ? str : "";
     sIsKeyboardTextChanged = true;
+    sKeyboardCursorPos = arg->cursorPos;
+}
+
+static void OnKeyboardMovedCursor(const char* str, SwkbdMovedCursorArg* arg) {
+    sKeyboardCursorPos = arg->cursorPos;
+    sIsCursorMoved = true;
 }
 
 static void OnKeyboardDecidedEnter(const char* str, SwkbdDecidedEnterArg*) {
@@ -122,20 +127,12 @@ static void OnKeyboardDecidedCancel() {
 }
 
 void Ship::Switch::CreateKeyboard() {
-    Result rc = swkbdCreate(&keyboard, 0);
-    if (R_FAILED(rc)) {
-        SPDLOG_ERROR("Failed to create keyboard: {}", rc);
-    } else {
-        swkbdConfigMakePresetDefault(&keyboard);
-    }
-
-   /* auto result = swkbdInlineCreate(&sKeyboard);
+    auto result = swkbdInlineCreate(&sKeyboard);
     if (R_FAILED(result)) {
         SPDLOG_ERROR("swkbdInlineCreate failed: {:#x}", result);
         return;
     }
 
-    // AppletDisplayMode: the system composites the keyboard overlay; we only receive the text through callbacks.
     result = swkbdInlineLaunchForLibraryApplet(&sKeyboard, SwkbdInlineMode_AppletDisplay, 0);
     if (R_FAILED(result)) {
         SPDLOG_ERROR("swkbdInlineLaunchForLibraryApplet failed: {:#x}", result);
@@ -143,12 +140,12 @@ void Ship::Switch::CreateKeyboard() {
         return;
     }
 
-    // Callbacks must be set after launch.
     swkbdInlineSetChangedStringCallback(&sKeyboard, OnKeyboardStringChanged);
+    swkbdInlineSetMovedCursorCallback(&sKeyboard, OnKeyboardMovedCursor);
     swkbdInlineSetDecidedEnterCallback(&sKeyboard, OnKeyboardDecidedEnter);
     swkbdInlineSetDecidedCancelCallback(&sKeyboard, OnKeyboardDecidedCancel);
 
-    sIsKeyboardLaunched = true;*/
+    sIsKeyboardLaunched = true;
 }
 
 // The inline keyboard is event-driven: this pumps applet replies and fires the callbacks.
@@ -162,26 +159,106 @@ void Ship::Switch::UpdateKeyboard() {
 }
 
 void Ship::Switch::ImGuiProcessEvent(bool wantsTextInput) {
-    if (wantsTextInput) {
-        if (!isShowingVirtualKeyboard) {
-            ImGuiInputTextState* state = ImGui::GetInputTextState(ImGui::GetActiveID());
-            ImGuiIO& io = ImGui::GetIO();
-            isShowingVirtualKeyboard = true;
-            memset(kbBuffer, 0, sizeof(kbBuffer));
-            if (state && state->TextA.Size > 0) {
-                strncpy(kbBuffer, state->TextA.Data, sizeof(kbBuffer) - 1);
-            }
-            swkbdConfigSetInitialText(&keyboard, kbBuffer);
-            swkbdShow(&keyboard, kbBuffer, sizeof(kbBuffer));
+}
 
-            if (state)
-                state->ClearText();
-            io.SetAppAcceptingEvents(true);
-            io.AddInputCharactersUTF8(kbBuffer);
-        }
-    } else if (isShowingVirtualKeyboard) {
-        isShowingVirtualKeyboard = false;
+static bool sPendingCancel = false;
+
+static constexpr int kStbKeyLeft = 0x200000;
+static constexpr int kStbKeyRight = 0x200001;
+
+static void SyncCursorPosition(ImGuiInputTextState* state, int targetPos) {
+    int pos = state->GetCursorPos();
+    while (pos > targetPos) {
+        state->OnKeyPressed(kStbKeyLeft);
+        pos--;
     }
+    while (pos < targetPos) {
+        state->OnKeyPressed(kStbKeyRight);
+        pos++;
+    }
+}
+
+void Ship::Switch::HandleInlineKeyboard() {
+    if (!sIsKeyboardLaunched) {
+        return;
+    }
+
+    ImGuiContext& g = *GImGui;
+    ImGuiIO& io = ImGui::GetIO();
+
+    if (sPendingCancel) {
+        sPendingCancel = false;
+        if (g.ActiveId == sKeyboardOwner) {
+            ImGui::ClearActiveID();
+        }
+        sKeyboardOwner = 0;
+    }
+
+    if (sPendingCursorPos >= 0) {
+        ImGuiInputTextState* state = ImGui::GetInputTextState(sKeyboardOwner);
+        if (state) {
+            SyncCursorPosition(state, sPendingCursorPos);
+        }
+        sPendingCursorPos = -1;
+    }
+
+    if (io.WantTextInput && !sIsKeyboardActive && sKeyboardOwner == 0) {
+        ImGuiInputTextState* state = ImGui::GetInputTextState(g.ActiveId);
+        if (state) {
+            std::string initialText;
+            if (state->TextLen > 0) {
+                initialText.assign(state->TextA.Data, state->TextLen);
+            }
+            ShowKeyboard(g.ActiveId, initialText);
+        }
+    }
+
+    if (sIsCursorMoved && !sIsKeyboardTextChanged) {
+        ImGuiInputTextState* state = ImGui::GetInputTextState(sKeyboardOwner);
+        if (state && sKeyboardCursorPos >= 0) {
+            SyncCursorPosition(state, sKeyboardCursorPos);
+        }
+        sIsCursorMoved = false;
+    }
+
+    if (sIsKeyboardTextChanged) {
+        sIsKeyboardTextChanged = false;
+        sIsCursorMoved = false;
+
+        ImGuiInputTextState* state = ImGui::GetInputTextState(sKeyboardOwner);
+        if (state) {
+            state->ClearText();
+            const char* s = sKeyboardText.c_str();
+            while (*s) {
+                unsigned int c;
+                int adv = ImTextCharFromUtf8(&c, s, nullptr);
+                if (c == 0) break;
+                io.InputQueueCharacters.push_back((ImWchar)c);
+                s += adv;
+            }
+            sPendingCursorPos = sKeyboardCursorPos;
+        }
+
+        if (sIsKeyboardSubmitted) {
+            sIsKeyboardSubmitted = false;
+            io.AddKeyEvent(ImGuiKey_Enter, true);
+            io.AddKeyEvent(ImGuiKey_Enter, false);
+        } else if (!sIsKeyboardActive) {
+            sPendingCancel = true;
+        }
+    }
+
+    if (!io.WantTextInput && sIsKeyboardActive) {
+        swkbdInlineDisappear(&sKeyboard);
+        sIsKeyboardActive = false;
+        sKeyboardOwner = 0;
+    }
+
+    if (!io.WantTextInput && !sIsKeyboardActive) {
+        sKeyboardOwner = 0;
+    }
+
+    io.SetAppAcceptingEvents(!sIsKeyboardActive);
 }
 
 
@@ -189,12 +266,11 @@ void Ship::Switch::ShowKeyboard(ImGuiID owner, const std::string& initialText) {
     if (!sIsKeyboardLaunched || sIsKeyboardActive) {
         return;
     }
-/*
+
     sKeyboardOwner = owner;
     sKeyboardText = initialText;
     sIsKeyboardSubmitted = false;
     swkbdInlineSetInputText(&sKeyboard, initialText.c_str());
-    // SetInputText doesn't move the caret, so place it at the end.
     swkbdInlineSetCursorPos(&sKeyboard, static_cast<std::int32_t>(initialText.length()));
 
     SwkbdAppearArg appear = {};
@@ -202,7 +278,7 @@ void Ship::Switch::ShowKeyboard(ImGuiID owner, const std::string& initialText) {
     swkbdInlineAppearArgSetStringLenMax(&appear, 255);
     swkbdInlineAppear(&sKeyboard, &appear);
 
-    sIsKeyboardActive = true;*/
+    sIsKeyboardActive = true;
 }
 
 bool Ship::Switch::IsKeyboardActive() {

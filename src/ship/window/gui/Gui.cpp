@@ -307,6 +307,10 @@ void Gui::StartFrame() {
         }
     }
 
+#ifdef __SWITCH__
+    Switch::HandleInlineKeyboard();
+#endif
+
 }
 
 void Gui::EndFrame() {
