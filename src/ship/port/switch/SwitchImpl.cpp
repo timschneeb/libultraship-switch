@@ -17,6 +17,10 @@
 static AppletHookCookie applet_hook_cookie;
 static bool isRunning = true;
 static bool hasFocus = true;
+static bool isShowingVirtualKeyboard = false;
+
+static SwkbdConfig keyboard;
+static char kbBuffer[256] = { 0 };
 
 static SwkbdInline sKeyboard;
 static bool sIsKeyboardLaunched = false;
@@ -37,9 +41,9 @@ void Ship::Switch::Init(SwitchPhase phase) {
         case PreInitPhase:
             DetectAppletMode();
             socketInitializeDefault();
-#ifdef DEBUG
+//#ifdef DEBUG
             nxlinkStdio();
-#endif
+//#endif
             break;
         case PostInitPhase:
             appletInitializeGamePlayRecording();
@@ -118,7 +122,14 @@ static void OnKeyboardDecidedCancel() {
 }
 
 void Ship::Switch::CreateKeyboard() {
-    auto result = swkbdInlineCreate(&sKeyboard);
+    Result rc = swkbdCreate(&keyboard, 0);
+    if (R_FAILED(rc)) {
+        SPDLOG_ERROR("Failed to create keyboard: {}", rc);
+    } else {
+        swkbdConfigMakePresetDefault(&keyboard);
+    }
+
+   /* auto result = swkbdInlineCreate(&sKeyboard);
     if (R_FAILED(result)) {
         SPDLOG_ERROR("swkbdInlineCreate failed: {:#x}", result);
         return;
@@ -137,7 +148,7 @@ void Ship::Switch::CreateKeyboard() {
     swkbdInlineSetDecidedEnterCallback(&sKeyboard, OnKeyboardDecidedEnter);
     swkbdInlineSetDecidedCancelCallback(&sKeyboard, OnKeyboardDecidedCancel);
 
-    sIsKeyboardLaunched = true;
+    sIsKeyboardLaunched = true;*/
 }
 
 // The inline keyboard is event-driven: this pumps applet replies and fires the callbacks.
@@ -150,11 +161,35 @@ void Ship::Switch::UpdateKeyboard() {
     swkbdInlineUpdate(&sKeyboard, nullptr);
 }
 
+void Ship::Switch::ImGuiProcessEvent(bool wantsTextInput) {
+    if (wantsTextInput) {
+        if (!isShowingVirtualKeyboard) {
+            ImGuiInputTextState* state = ImGui::GetInputTextState(ImGui::GetActiveID());
+            ImGuiIO& io = ImGui::GetIO();
+            isShowingVirtualKeyboard = true;
+            memset(kbBuffer, 0, sizeof(kbBuffer));
+            if (state && state->TextA.Size > 0) {
+                strncpy(kbBuffer, state->TextA.Data, sizeof(kbBuffer) - 1);
+            }
+            swkbdConfigSetInitialText(&keyboard, kbBuffer);
+            swkbdShow(&keyboard, kbBuffer, sizeof(kbBuffer));
+
+            if (state)
+                state->ClearText();
+            io.SetAppAcceptingEvents(true);
+            io.AddInputCharactersUTF8(kbBuffer);
+        }
+    } else if (isShowingVirtualKeyboard) {
+        isShowingVirtualKeyboard = false;
+    }
+}
+
+
 void Ship::Switch::ShowKeyboard(ImGuiID owner, const std::string& initialText) {
     if (!sIsKeyboardLaunched || sIsKeyboardActive) {
         return;
     }
-
+/*
     sKeyboardOwner = owner;
     sKeyboardText = initialText;
     sIsKeyboardSubmitted = false;
@@ -167,7 +202,7 @@ void Ship::Switch::ShowKeyboard(ImGuiID owner, const std::string& initialText) {
     swkbdInlineAppearArgSetStringLenMax(&appear, 255);
     swkbdInlineAppear(&sKeyboard, &appear);
 
-    sIsKeyboardActive = true;
+    sIsKeyboardActive = true;*/
 }
 
 bool Ship::Switch::IsKeyboardActive() {

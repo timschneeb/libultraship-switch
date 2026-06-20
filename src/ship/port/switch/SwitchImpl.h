@@ -19,6 +19,7 @@ class Switch {
     static void Init(SwitchPhase phase);
     static void Exit();
     static void ImGuiSetupFont(ImFontAtlas* fonts);
+    static void ImGuiProcessEvent(bool wantsTextInput);
     static void CreateKeyboard();
     // Pumps the inline keyboard applet; called once per frame.
     static void UpdateKeyboard();
