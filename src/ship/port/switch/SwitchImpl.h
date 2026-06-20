@@ -14,27 +14,15 @@ enum SwitchProfiles { MAXIMUM, HIGH, BOOST, STOCK, POWERSAVINGM1, POWERSAVINGM2,
 
 enum SwitchPhase { PreInitPhase, PostInitPhase };
 
-class Switch {
-  public:
-    static void Init(SwitchPhase phase);
-    static void Exit();
-    static void ImGuiSetupFont(ImFontAtlas* fonts);
-    static void CreateKeyboard();
-    // Pumps the inline keyboard applet; called once per frame.
-    static void UpdateKeyboard();
-    // Shows the inline software keyboard, seeded with initialText.
-    // The typed string is streamed via callbacks, read with ConsumeKeyboardText.
-    static void ShowKeyboard(ImGuiID owner, const std::string& initialText);
-    static bool IsKeyboardActive();
-    // Fills out the latest keyboard text once per change, but only for the owner that opened the current session;
-    // returns false otherwise.  If submitted is non-null, it is set to true when that change came from the player
-    // confirming (Enter), false otherwise.
-    static bool ConsumeKeyboardText(ImGuiID owner, std::string& out, bool* isSubmitted = nullptr);
-    static bool IsRunning();
-    static void GetDisplaySize(int* width, int* height);
-    static void ApplyOverclock();
-    static void ShowErrorApplet(const char* format, ...);
-    static void ThrowMissingOTR(std::string otrPath);
-    static char* GetControllerUUID(int controller);
+namespace Switch {
+    void Init(SwitchPhase phase);
+    void Exit();
+    void ImGuiSetupFont(ImFontAtlas* fonts);
+    bool IsRunning();
+    void GetDisplaySize(int* width, int* height);
+    void ApplyOverclock();
+    void ShowErrorApplet(const char* format, ...);
+    void ThrowMissingOTR(std::string otrPath);
+    char* GetControllerUUID(int controller);
 };
 }; // namespace Ship

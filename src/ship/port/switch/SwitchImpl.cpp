@@ -1,5 +1,6 @@
 #ifdef __SWITCH__
 #include "SwitchImpl.h"
+#include "SwitchKeyboard.h"
 #include <switch.h>
 #include <SDL2/SDL.h>
 #include "SwitchPerformanceProfiles.h"
@@ -9,22 +10,12 @@
 #include "ship/audio/Audio.h"
 #include "ship/utils/StringHelper.h"
 
-#include <imgui_internal.h>
-
 #define DOCKED_MODE 1
 #define HANDHELD_MODE 0
 
 static AppletHookCookie applet_hook_cookie;
 static bool isRunning = true;
 static bool hasFocus = true;
-
-static SwkbdInline sKeyboard;
-static bool sIsKeyboardLaunched = false;
-static bool sIsKeyboardActive = false;
-static std::string sKeyboardText;
-static bool sIsKeyboardTextChanged = false;
-static bool sIsKeyboardSubmitted = false;
-static ImGuiID sKeyboardOwner = 0;
 
 HidsysUniquePadId uniquePadIds[8];
 
@@ -37,7 +28,7 @@ void Ship::Switch::Init(SwitchPhase phase) {
         case PreInitPhase:
             DetectAppletMode();
             socketInitializeDefault();
-#ifdef DEBUG
+#ifdef _DEBUG
             nxlinkStdio();
 #endif
             break;
@@ -58,11 +49,7 @@ void Ship::Switch::Init(SwitchPhase phase) {
 }
 
 void Ship::Switch::Exit() {
-    if (sIsKeyboardLaunched) {
-        swkbdInlineClose(&sKeyboard);
-        sIsKeyboardLaunched = false;
-    }
-
+    Keyboard::Close();
     socketExit();
     clkrstExit();
     appletSetGamePlayRecordingState(false);
@@ -94,106 +81,6 @@ void Ship::Switch::ImGuiSetupFont(ImFontAtlas* fonts) {
     fonts->Build();
 
     plExit();
-}
-
-static void OnKeyboardStringChanged(const char* str, SwkbdChangedStringArg*) {
-    sKeyboardText = str ? str : "";
-    sIsKeyboardTextChanged = true;
-}
-
-static void OnKeyboardDecidedEnter(const char* str, SwkbdDecidedEnterArg*) {
-    sKeyboardText = str ? str : "";
-    sIsKeyboardTextChanged = true;
-    sIsKeyboardSubmitted = true;
-    swkbdInlineDisappear(&sKeyboard);
-    sIsKeyboardActive = false;
-}
-
-static void OnKeyboardDecidedCancel() {
-    // Keep whatever the player left in the field -- including empty, after erasing everything.
-    // The cancel button already disappears the keyboard, so don't call Disappear here (it corrupts the applet and
-    // breaks the next Appear).
-    sIsKeyboardTextChanged = true;
-    sIsKeyboardActive = false;
-}
-
-void Ship::Switch::CreateKeyboard() {
-    auto result = swkbdInlineCreate(&sKeyboard);
-    if (R_FAILED(result)) {
-        SPDLOG_ERROR("swkbdInlineCreate failed: {:#x}", result);
-        return;
-    }
-
-    // AppletDisplayMode: the system composites the keyboard overlay; we only receive the text through callbacks.
-    result = swkbdInlineLaunchForLibraryApplet(&sKeyboard, SwkbdInlineMode_AppletDisplay, 0);
-    if (R_FAILED(result)) {
-        SPDLOG_ERROR("swkbdInlineLaunchForLibraryApplet failed: {:#x}", result);
-        swkbdInlineClose(&sKeyboard);
-        return;
-    }
-
-    // Callbacks must be set after launch.
-    swkbdInlineSetChangedStringCallback(&sKeyboard, OnKeyboardStringChanged);
-    swkbdInlineSetDecidedEnterCallback(&sKeyboard, OnKeyboardDecidedEnter);
-    swkbdInlineSetDecidedCancelCallback(&sKeyboard, OnKeyboardDecidedCancel);
-
-    sIsKeyboardLaunched = true;
-}
-
-// The inline keyboard is event-driven: this pumps applet replies and fires the callbacks.
-// It must run every frame once launched.
-void Ship::Switch::UpdateKeyboard() {
-    if (!sIsKeyboardLaunched) {
-        return;
-    }
-
-    swkbdInlineUpdate(&sKeyboard, nullptr);
-}
-
-void Ship::Switch::ShowKeyboard(ImGuiID owner, const std::string& initialText) {
-    if (!sIsKeyboardLaunched || sIsKeyboardActive) {
-        return;
-    }
-
-    sKeyboardOwner = owner;
-    sKeyboardText = initialText;
-    sIsKeyboardSubmitted = false;
-    swkbdInlineSetInputText(&sKeyboard, initialText.c_str());
-    // SetInputText doesn't move the caret, so place it at the end.
-    swkbdInlineSetCursorPos(&sKeyboard, static_cast<std::int32_t>(initialText.length()));
-
-    SwkbdAppearArg appear = {};
-    swkbdInlineMakeAppearArg(&appear, SwkbdType_QWERTY);
-    swkbdInlineAppearArgSetStringLenMax(&appear, 255);
-    swkbdInlineAppear(&sKeyboard, &appear);
-
-    sIsKeyboardActive = true;
-}
-
-bool Ship::Switch::IsKeyboardActive() {
-    return sIsKeyboardActive;
-}
-
-// Returns true and fills out with the latest keyboard text exactly once per change (typing, enter, or cancel-revert).
-// One-shot so it doesn't continually overwrite the filter and fight other edits.
-bool Ship::Switch::ConsumeKeyboardText(ImGuiID owner, std::string& out, bool* isSubmitted) {
-    if (!sIsKeyboardTextChanged || sKeyboardOwner != owner) {
-        if (isSubmitted) {
-            *isSubmitted = false;
-        }
-
-        return false;
-    }
-
-    sIsKeyboardTextChanged = false;
-    out = sKeyboardText;
-
-    if (isSubmitted) {
-        *isSubmitted = sIsKeyboardSubmitted;
-    }
-
-    sIsKeyboardSubmitted = false;
-    return true;
 }
 
 bool Ship::Switch::IsRunning() {
@@ -262,11 +149,8 @@ static void on_applet_hook(AppletHookType hook, void* param) {
                 }
             } else {
                 Ship::Switch::ApplyOverclock();
-                // reinitialize audio subsystem to fix audio problems after resuming from sleep
-                // see https://github.com/HarbourMasters/Shipwright/issues/3317
                 SPDLOG_INFO("restarting SDL audio system to work around audio problems on resume");
                 if (auto audio = Ship::Context::GetRawInstance()->GetAudio(); audio != nullptr) {
-                    // the audio subsystem is not initialized during applet boot
                     audio->SetCurrentAudioBackend(Ship::AudioBackend::SDL);
                 }
             }
@@ -289,7 +173,6 @@ static void on_applet_hook(AppletHookType hook, void* param) {
 void Ship::Switch::ShowErrorApplet(const char* format, ...) {
     ErrorSystemConfig errorConfig = {};
 
-    // Error applet can display up to 2048 bytes
     char messageBuffer[2048];
     va_list args;
     va_start(args, format);
@@ -299,7 +182,7 @@ void Ship::Switch::ShowErrorApplet(const char* format, ...) {
     const Result rc = errorSystemCreate(&errorConfig, messageBuffer, nullptr);
 
     if (R_SUCCEEDED(rc)) {
-        errorSystemSetResult(&errorConfig, MAKERESULT(400, 1)); // module id, error code
+        errorSystemSetResult(&errorConfig, MAKERESULT(400, 1));
         errorSystemShow(&errorConfig);
     }
 }

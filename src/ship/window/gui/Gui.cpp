@@ -18,6 +18,7 @@
 
 #ifdef __SWITCH__
 #include "ship/port/switch/SwitchImpl.h"
+#include "ship/port/switch/SwitchKeyboard.h"
 #endif
 
 namespace Ship {
@@ -75,7 +76,7 @@ void Gui::Init() {
                                                           &iconsConfig, sIconsRanges);
 
 #ifdef __SWITCH__
-    Ship::Switch::CreateKeyboard();
+    Ship::Switch::Keyboard::Create();
     Ship::Switch::ImGuiSetupFont(mImGuiIo->Fonts);
 #endif
 
@@ -277,31 +278,32 @@ void Gui::StartFrame() {
     HandleMouseCapture();
     ImGuiBackendNewFrame();
     ImGuiWMNewFrame();
-#ifdef __SWITCH__
-    // Pump the inline software keyboard, then block menu navigation while it's on-screen so controller input drives
-    // the keyboard rather than the menu underneath.  Blocked every frame because the menu reasserts NavEnableGamepad
-    // during its draw (after StartFrame), so a one-shot block would last a single frame.  Unblock once on release so
-    // we don't stomp other navigation blockers while the keyboard is closed.
-    Switch::UpdateKeyboard();
+    ImGui::NewFrame();
 
-    static bool sWasKeyboardActive = false;
-    const bool isKeyboardActive = Switch::IsKeyboardActive();
-
-    if (isKeyboardActive) {
-        BlockGamepadNavigation();
-    } else if (sWasKeyboardActive) {
-        UnblockGamepadNavigation();
+    /* Workaround: ImGui does not trigger the on-screen keyboard for activate events from controllers (text boxes).
+     * If PreferTweak is set on an element, we pretend to be using a keyboard to activate textboxes. */
+    {
+        ImGuiContext& g = *GImGui;
+        if (g.NavActivateId != 0 && g.NavInputSource == ImGuiInputSource_Gamepad &&
+            (g.NavActivateFlags & ImGuiActivateFlags_PreferTweak)) {
+            g.NavInputSource = ImGuiInputSource_Keyboard;
+        }
     }
 
-    sWasKeyboardActive = isKeyboardActive;
+#ifdef __SWITCH__
+    Switch::Keyboard::Update();
 #endif
-    ImGui::NewFrame();
+
 }
 
 void Gui::EndFrame() {
     // Draw the ImGui "viewports" which are the floating windows.
     ImGui::Render();
-    ImGuiRenderDrawData(ImGui::GetDrawData());
+    ImDrawData* drawData = ImGui::GetDrawData();
+#ifdef __SWITCH__
+    drawData->DisplayPos.y += Switch::Keyboard::GetYOffset();
+#endif
+    ImGuiRenderDrawData(drawData);
     ImGui::EndFrame();
 }
 

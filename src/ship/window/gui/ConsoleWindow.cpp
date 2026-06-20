@@ -7,11 +7,6 @@
 #include "ship/utils/Utils.h"
 #include <sstream>
 
-#if defined(__SWITCH__)
-#include <imgui_internal.h>
-#include "ship/port/switch/SwitchImpl.h"
-#endif
-
 namespace Ship {
 
 int32_t ConsoleWindow::HelpCommand(std::shared_ptr<Console> console, const std::vector<std::string>& args,
@@ -439,20 +434,6 @@ void ConsoleWindow::DrawElement() {
     if (ImGui::InputTextWithHint("##input", "Filter", mFilterBuffer, gMaxBufferSize)) {
         mFilter = std::string(mFilterBuffer);
     }
-
-#if defined(__SWITCH__)
-    auto id = ImGui::GetItemID();
-    if (ImGui::IsItemActivated() || ImGui::GetCurrentContext()->NavActivateId == id) {
-        Switch::ShowKeyboard(id, mFilterBuffer);
-    }
-
-    std::string text;
-    if (Switch::ConsumeKeyboardText(id, text)) {
-        std::snprintf(mFilterBuffer, gMaxBufferSize, "%s", text.c_str());
-        mFilter = std::string(mFilterBuffer);
-    }
-#endif
-
     ImGui::PopItemWidth();
 
     // Renders console history
@@ -529,28 +510,6 @@ void ConsoleWindow::DrawElement() {
             }
             memset(mInputBuffer, 0, gMaxBufferSize);
         }
-
-#if defined(__SWITCH__)
-        id = ImGui::GetItemID();
-        if (ImGui::IsItemActivated() || ImGui::GetCurrentContext()->NavActivateId == id) {
-            Switch::ShowKeyboard(id, mInputBuffer);
-        }
-
-        std::string cmd;
-        bool isSubmitted = false;
-        if (Switch::ConsumeKeyboardText(id, cmd, &isSubmitted)) {
-            std::snprintf(mInputBuffer, gMaxBufferSize, "%s", cmd.c_str());
-            inputFocus = true;
-
-            if (isSubmitted) {
-                if (mInputBuffer[0] != '\0' && mInputBuffer[0] != ' ') {
-                    Dispatch(std::string(mInputBuffer));
-                }
-
-                std::memset(mInputBuffer, 0, gMaxBufferSize);
-            }
-        }
-#endif
 
         if (mCmdHint != "None") {
             if (ImGui::IsItemFocused()) {
