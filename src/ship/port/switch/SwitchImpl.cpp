@@ -11,6 +11,10 @@
 
 #include <imgui_internal.h>
 
+namespace ImStb {
+#include <imstb_textedit.h>
+}
+
 #define DOCKED_MODE 1
 #define HANDHELD_MODE 0
 
@@ -27,8 +31,8 @@ static bool sIsKeyboardSubmitted = false;
 static ImGuiID sKeyboardOwner = 0;
 static int sKeyboardCursorPos = -1;
 static bool sIsCursorMoved = false;
-static int sPendingCursorPos = -1;
 static float sKeyboardYOffset = 0.0f;
+static int sPendingCursorPos = -1;
 
 HidsysUniquePadId uniquePadIds[8];
 
@@ -164,23 +168,15 @@ void Ship::Switch::ImGuiProcessEvent(bool wantsTextInput) {
 
 static bool sPendingCancel = false;
 
-static constexpr int kStbKeyLeft = 0x200000;
-static constexpr int kStbKeyRight = 0x200001;
-
-static void SyncCursorPosition(ImGuiInputTextState* state, int targetPos) {
-    if (!state->TextA.Data || state->TextLen <= 0) {
+static void SetInputTextCursorPos(ImGuiInputTextState* state, int pos) {
+    if (!state || !state->Stb) {
         return;
     }
-    targetPos = ImClamp(targetPos, 0, state->TextLen);
-    int pos = state->GetCursorPos();
-    while (pos > targetPos) {
-        state->OnKeyPressed(kStbKeyLeft);
-        pos--;
-    }
-    while (pos < targetPos) {
-        state->OnKeyPressed(kStbKeyRight);
-        pos++;
-    }
+    pos = ImClamp(pos, 0, state->TextLen);
+    state->Stb->cursor = pos;
+    state->Stb->select_start = pos;
+    state->Stb->select_end = pos;
+    state->CursorFollow = true;
 }
 
 void Ship::Switch::HandleInlineKeyboard() {
@@ -203,7 +199,7 @@ void Ship::Switch::HandleInlineKeyboard() {
     if (sPendingCursorPos >= 0) {
         ImGuiInputTextState* state = ImGui::GetInputTextState(sKeyboardOwner);
         if (state) {
-            SyncCursorPosition(state, sPendingCursorPos);
+            SetInputTextCursorPos(state, sPendingCursorPos);
         }
         sPendingCursorPos = -1;
     }
@@ -222,7 +218,7 @@ void Ship::Switch::HandleInlineKeyboard() {
     if (sIsCursorMoved && !sIsKeyboardTextChanged) {
         ImGuiInputTextState* state = ImGui::GetInputTextState(sKeyboardOwner);
         if (state && sKeyboardCursorPos >= 0) {
-            SyncCursorPosition(state, sKeyboardCursorPos);
+            SetInputTextCursorPos(state, sKeyboardCursorPos);
         }
         sIsCursorMoved = false;
     }
@@ -277,9 +273,6 @@ void Ship::Switch::HandleInlineKeyboard() {
             sKeyboardYOffset = 0.0f;
         }
     } else {
-        if (sIsKeyboardActive) {
-            SPDLOG_INFO("KB active but WantVisible={}", g.PlatformImeDataPrev.WantVisible);
-        }
         sKeyboardYOffset = 0.0f;
     }
 
