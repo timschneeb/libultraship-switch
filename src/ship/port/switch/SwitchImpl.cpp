@@ -17,10 +17,14 @@
 static AppletHookCookie applet_hook_cookie;
 static bool isRunning = true;
 static bool hasFocus = true;
-static bool isShowingVirtualKeyboard = false;
 
-static SwkbdConfig keyboard;
-static char kbBuffer[256] = { 0 };
+static SwkbdInline sKeyboard;
+static bool sIsKeyboardLaunched = false;
+static bool sIsKeyboardActive = false;
+static std::string sKeyboardText;
+static bool sIsKeyboardTextChanged = false;
+static bool sIsKeyboardSubmitted = false;
+static ImGuiID sKeyboardOwner = 0;
 
 HidsysUniquePadId uniquePadIds[8];
 
@@ -54,6 +58,11 @@ void Ship::Switch::Init(SwitchPhase phase) {
 }
 
 void Ship::Switch::Exit() {
+    if (sIsKeyboardLaunched) {
+        swkbdInlineClose(&sKeyboard);
+        sIsKeyboardLaunched = false;
+    }
+
     socketExit();
     clkrstExit();
     appletSetGamePlayRecordingState(false);
@@ -87,30 +96,104 @@ void Ship::Switch::ImGuiSetupFont(ImFontAtlas* fonts) {
     plExit();
 }
 
-void Ship::Switch::CreateKeyboard() {
-    Result rc = swkbdCreate(&keyboard, 0);
-    if (R_FAILED(rc)) {
-        SPDLOG_ERROR("Failed to create keyboard: {}", rc);
-    } else {
-        swkbdConfigMakePresetDefault(&keyboard);
-    }
+static void OnKeyboardStringChanged(const char* str, SwkbdChangedStringArg*) {
+    sKeyboardText = str ? str : "";
+    sIsKeyboardTextChanged = true;
 }
 
-void Ship::Switch::ImGuiProcessEvent(bool wantsTextInput) {
-    ImGuiInputTextState* state = ImGui::GetInputTextState(ImGui::GetActiveID());
-    ImGuiIO& io = ImGui::GetIO();
-    if (wantsTextInput) {
-        if (!isShowingVirtualKeyboard) {
-            state->ClearText();
-            isShowingVirtualKeyboard = true;
-            memset(kbBuffer, 0, sizeof(kbBuffer));
-            swkbdShow(&keyboard, kbBuffer, sizeof(kbBuffer));
-            io.SetAppAcceptingEvents(true);
-            io.AddInputCharactersUTF8(kbBuffer);
-        }
-    } else if (isShowingVirtualKeyboard) {
-        isShowingVirtualKeyboard = false;
+static void OnKeyboardDecidedEnter(const char* str, SwkbdDecidedEnterArg*) {
+    sKeyboardText = str ? str : "";
+    sIsKeyboardTextChanged = true;
+    sIsKeyboardSubmitted = true;
+    swkbdInlineDisappear(&sKeyboard);
+    sIsKeyboardActive = false;
+}
+
+static void OnKeyboardDecidedCancel() {
+    // Keep whatever the player left in the field -- including empty, after erasing everything.
+    // The cancel button already disappears the keyboard, so don't call Disappear here (it corrupts the applet and
+    // breaks the next Appear).
+    sIsKeyboardTextChanged = true;
+    sIsKeyboardActive = false;
+}
+
+void Ship::Switch::CreateKeyboard() {
+    auto result = swkbdInlineCreate(&sKeyboard);
+    if (R_FAILED(result)) {
+        SPDLOG_ERROR("swkbdInlineCreate failed: {:#x}", result);
+        return;
     }
+
+    // AppletDisplayMode: the system composites the keyboard overlay; we only receive the text through callbacks.
+    result = swkbdInlineLaunchForLibraryApplet(&sKeyboard, SwkbdInlineMode_AppletDisplay, 0);
+    if (R_FAILED(result)) {
+        SPDLOG_ERROR("swkbdInlineLaunchForLibraryApplet failed: {:#x}", result);
+        swkbdInlineClose(&sKeyboard);
+        return;
+    }
+
+    // Callbacks must be set after launch.
+    swkbdInlineSetChangedStringCallback(&sKeyboard, OnKeyboardStringChanged);
+    swkbdInlineSetDecidedEnterCallback(&sKeyboard, OnKeyboardDecidedEnter);
+    swkbdInlineSetDecidedCancelCallback(&sKeyboard, OnKeyboardDecidedCancel);
+
+    sIsKeyboardLaunched = true;
+}
+
+// The inline keyboard is event-driven: this pumps applet replies and fires the callbacks.
+// It must run every frame once launched.
+void Ship::Switch::UpdateKeyboard() {
+    if (!sIsKeyboardLaunched) {
+        return;
+    }
+
+    swkbdInlineUpdate(&sKeyboard, nullptr);
+}
+
+void Ship::Switch::ShowKeyboard(ImGuiID owner, const std::string& initialText) {
+    if (!sIsKeyboardLaunched || sIsKeyboardActive) {
+        return;
+    }
+
+    sKeyboardOwner = owner;
+    sKeyboardText = initialText;
+    sIsKeyboardSubmitted = false;
+    swkbdInlineSetInputText(&sKeyboard, initialText.c_str());
+    // SetInputText doesn't move the caret, so place it at the end.
+    swkbdInlineSetCursorPos(&sKeyboard, static_cast<std::int32_t>(initialText.length()));
+
+    SwkbdAppearArg appear = {};
+    swkbdInlineMakeAppearArg(&appear, SwkbdType_QWERTY);
+    swkbdInlineAppearArgSetStringLenMax(&appear, 255);
+    swkbdInlineAppear(&sKeyboard, &appear);
+
+    sIsKeyboardActive = true;
+}
+
+bool Ship::Switch::IsKeyboardActive() {
+    return sIsKeyboardActive;
+}
+
+// Returns true and fills out with the latest keyboard text exactly once per change (typing, enter, or cancel-revert).
+// One-shot so it doesn't continually overwrite the filter and fight other edits.
+bool Ship::Switch::ConsumeKeyboardText(ImGuiID owner, std::string& out, bool* isSubmitted) {
+    if (!sIsKeyboardTextChanged || sKeyboardOwner != owner) {
+        if (isSubmitted) {
+            *isSubmitted = false;
+        }
+
+        return false;
+    }
+
+    sIsKeyboardTextChanged = false;
+    out = sKeyboardText;
+
+    if (isSubmitted) {
+        *isSubmitted = sIsKeyboardSubmitted;
+    }
+
+    sIsKeyboardSubmitted = false;
+    return true;
 }
 
 bool Ship::Switch::IsRunning() {

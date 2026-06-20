@@ -19,9 +19,17 @@ class Switch {
     static void Init(SwitchPhase phase);
     static void Exit();
     static void ImGuiSetupFont(ImFontAtlas* fonts);
-    static void ImGuiProcessEvent(bool wantsTextInput);
     static void CreateKeyboard();
-    static void ShowKeyboard();
+    // Pumps the inline keyboard applet; called once per frame.
+    static void UpdateKeyboard();
+    // Shows the inline software keyboard, seeded with initialText.
+    // The typed string is streamed via callbacks, read with ConsumeKeyboardText.
+    static void ShowKeyboard(ImGuiID owner, const std::string& initialText);
+    static bool IsKeyboardActive();
+    // Fills out the latest keyboard text once per change, but only for the owner that opened the current session;
+    // returns false otherwise.  If submitted is non-null, it is set to true when that change came from the player
+    // confirming (Enter), false otherwise.
+    static bool ConsumeKeyboardText(ImGuiID owner, std::string& out, bool* isSubmitted = nullptr);
     static bool IsRunning();
     static void GetDisplaySize(int* width, int* height);
     static void ApplyOverclock();
