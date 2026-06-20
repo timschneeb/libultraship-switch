@@ -316,7 +316,11 @@ void Gui::StartFrame() {
 void Gui::EndFrame() {
     // Draw the ImGui "viewports" which are the floating windows.
     ImGui::Render();
-    ImGuiRenderDrawData(ImGui::GetDrawData());
+    ImDrawData* drawData = ImGui::GetDrawData();
+#ifdef __SWITCH__
+    drawData->DisplayPos.y += Switch::GetKeyboardYOffset();
+#endif
+    ImGuiRenderDrawData(drawData);
     ImGui::EndFrame();
 }
 

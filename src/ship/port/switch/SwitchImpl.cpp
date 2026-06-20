@@ -28,6 +28,7 @@ static ImGuiID sKeyboardOwner = 0;
 static int sKeyboardCursorPos = -1;
 static bool sIsCursorMoved = false;
 static int sPendingCursorPos = -1;
+static float sKeyboardYOffset = 0.0f;
 
 HidsysUniquePadId uniquePadIds[8];
 
@@ -167,6 +168,10 @@ static constexpr int kStbKeyLeft = 0x200000;
 static constexpr int kStbKeyRight = 0x200001;
 
 static void SyncCursorPosition(ImGuiInputTextState* state, int targetPos) {
+    if (!state->TextA.Data || state->TextLen <= 0) {
+        return;
+    }
+    targetPos = ImClamp(targetPos, 0, state->TextLen);
     int pos = state->GetCursorPos();
     while (pos > targetPos) {
         state->OnKeyPressed(kStbKeyLeft);
@@ -192,6 +197,7 @@ void Ship::Switch::HandleInlineKeyboard() {
             ImGui::ClearActiveID();
         }
         sKeyboardOwner = 0;
+        sPendingCursorPos = -1;
     }
 
     if (sPendingCursorPos >= 0) {
@@ -241,6 +247,7 @@ void Ship::Switch::HandleInlineKeyboard() {
 
         if (sIsKeyboardSubmitted) {
             sIsKeyboardSubmitted = false;
+            io.SetAppAcceptingEvents(true);
             io.AddKeyEvent(ImGuiKey_Enter, true);
             io.AddKeyEvent(ImGuiKey_Enter, false);
         } else if (!sIsKeyboardActive) {
@@ -258,7 +265,29 @@ void Ship::Switch::HandleInlineKeyboard() {
         sKeyboardOwner = 0;
     }
 
+    if (sIsKeyboardActive && g.PlatformImeDataPrev.WantVisible) {
+        float inputY = g.PlatformImeDataPrev.InputPos.y + g.PlatformImeDataPrev.InputLineHeight;
+        float keyboardTop = io.DisplaySize.y * 0.4f;
+        float margin = 0;
+        if (inputY > keyboardTop - margin) {
+            sKeyboardYOffset = inputY - keyboardTop + margin;
+            sKeyboardYOffset = ImMin(sKeyboardYOffset, g.PlatformImeDataPrev.InputPos.y - margin);
+            sKeyboardYOffset = ImMax(sKeyboardYOffset, 0.0f);
+        } else {
+            sKeyboardYOffset = 0.0f;
+        }
+    } else {
+        if (sIsKeyboardActive) {
+            SPDLOG_INFO("KB active but WantVisible={}", g.PlatformImeDataPrev.WantVisible);
+        }
+        sKeyboardYOffset = 0.0f;
+    }
+
     io.SetAppAcceptingEvents(!sIsKeyboardActive);
+}
+
+float Ship::Switch::GetKeyboardYOffset() {
+    return sKeyboardYOffset;
 }
 
 
