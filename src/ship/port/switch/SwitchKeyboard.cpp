@@ -197,7 +197,8 @@ void Ship::Switch::Keyboard::Update() {
             while (*s) {
                 unsigned int c;
                 int adv = ImTextCharFromUtf8(&c, s, nullptr);
-                if (c == 0) break;
+                if (c == 0)
+                    break;
                 io.InputQueueCharacters.push_back(static_cast<ImWchar>(c));
                 s += adv;
             }

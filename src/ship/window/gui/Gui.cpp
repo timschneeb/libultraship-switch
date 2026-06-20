@@ -293,7 +293,6 @@ void Gui::StartFrame() {
 #ifdef __SWITCH__
     Switch::Keyboard::Update();
 #endif
-
 }
 
 void Gui::EndFrame() {
