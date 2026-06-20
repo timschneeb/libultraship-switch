@@ -24,5 +24,5 @@ void ApplyOverclock();
 void ShowErrorApplet(const char* format, ...);
 void ThrowMissingOTR(std::string otrPath);
 char* GetControllerUUID(int controller);
-};
+}; // namespace Switch
 }; // namespace Ship
