@@ -1,5 +1,7 @@
 #include "fast/Fast3dGui.h"
 
+#include <chrono>
+
 #include "fast/Fast3dWindow.h"
 #include "ship/Context.h"
 #include "ship/config/ConsoleVariable.h"
@@ -165,6 +167,22 @@ void Fast3dGui::ImGuiBackendInit() {
                                 static_cast<ID3D11DeviceContext*>(mImpl.Dx11.DeviceContext));
             break;
 #endif
+
+#ifdef ENABLE_DEKO3D
+        case WindowBackend::FAST3D_DEKO3D: {
+            // No deku3d ImGui renderer yet.  Build the font atlas on the CPU so ImGui::NewFrame()'s IsBuilt() sanity
+            // check passes; the draw data ImGui produces is harmlessly discarded by the no-op deko3d RendererDrawData
+            // until the real backend lands.
+            const auto& io = ImGui::GetIO();
+            std::uint8_t* pixels = nullptr;
+            std::int32_t width = 0;
+            std::int32_t height = 0;
+
+            io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+            io.Fonts->SetTexID(reinterpret_cast<ImTextureID>(static_cast<std::intptr_t>(1)));
+            break;
+        }
+#endif
         default:
             break;
     }
@@ -213,6 +231,24 @@ void Fast3dGui::ImGuiBackendNewFrame() {
             break;
         }
 #endif
+
+#ifdef ENABLE_DEKO3D
+        case WindowBackend::FAST3D_DEKO3D: {
+            // No deko3d ImGui renderer yet.  SoH adds fonts after Gui::Init() built the atlas, dirtying it, and
+            // there's no impl-backend NewFrame to rebuild.  Rebuild on the CPU so ImGui::NewFrame()'s IsBuilt() assert
+            // passes; the draw data stays discarded until the real backend.
+            auto& io = ImGui::GetIO();
+            if (!io.Fonts->IsBuilt()) {
+                std::uint8_t* pixels = nullptr;
+                std::int32_t width = 0;
+                std::int32_t height = 0;
+                io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+                io.Fonts->SetTexID(reinterpret_cast<ImTextureID>(static_cast<std::intptr_t>(1)));
+            }
+
+            break;
+        }
+#endif
         default:
             break;
     }
@@ -228,6 +264,34 @@ void Fast3dGui::ImGuiWMNewFrame() {
         case WindowBackend::FAST3D_DXGI_DX11:
             ImGui_ImplWin32_NewFrame();
             break;
+#endif
+
+#ifdef ENABLE_DEKO3D
+        case WindowBackend::FAST3D_DEKO3D: {
+            // Stand-in for the ImGui platform backend on deko3d (no SDL_Window exists, so ImGui_ImplSDL2 can't drive
+            // display size/time).  Supply the two values that ImGui::NewFrame() sanity checks; input wiring comes
+            // with the real backend.
+            auto& io = ImGui::GetIO();
+            std::uint32_t width = 0;
+            std::uint32_t height = 0;
+            std::int32_t x = 0;
+            std::int32_t y = 0;
+
+            if (const auto interpreter = mInterpreter.lock()) {
+                interpreter->GetDimensions(&width, &height, &x, &y);
+            }
+
+            io.DisplaySize =
+                ImVec2(width ? static_cast<float>(width) : 1280.0f, height ? static_cast<float>(height) : 720.0f);
+
+            static auto sLast = std::chrono::steady_clock::now();
+            const auto now = std::chrono::steady_clock::now();
+            const float delta = std::chrono::duration<float>(now - sLast).count();
+
+            sLast = now;
+            io.DeltaTime = delta > 0.0f ? delta : 1.0f / 60.0f;
+            break;
+        }
 #endif
         default:
             break;

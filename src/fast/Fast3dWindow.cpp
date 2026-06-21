@@ -11,6 +11,12 @@
 #include "fast/backends/gfx_metal.h"
 #include "fast/backends/gfx_direct3d_common.h"
 #include "fast/backends/gfx_direct3d11.h"
+
+#ifdef ENABLE_DEKO3D
+#include "fast/backends/gfx_deko_window.h"
+#include "fast/backends/gfx_deko.h"
+#endif
+
 #include "fast/backends/gfx_window_manager_api.h"
 
 #include "fast/Fast3dGui.h"
@@ -35,6 +41,11 @@ Fast3dWindow::Fast3dWindow(std::shared_ptr<Ship::Gui> gui, std::shared_ptr<FastM
     if (Metal_IsSupported()) {
         AddAvailableWindowBackend(WindowBackend::FAST3D_SDL_METAL);
     }
+#endif
+#if defined(__SWITCH__) && defined(ENABLE_DEKO3D)
+    // deko3d talks to the GPU directly (no GL -> nouveau tier).  Registered first so it is the default backend, with
+    // the SDL + OpenGL path kept available.
+    AddAvailableWindowBackend(WindowBackend::FAST3D_DEKO3D);
 #endif
     AddAvailableWindowBackend(WindowBackend::FAST3D_SDL_OPENGL);
 }
@@ -153,6 +164,15 @@ void Fast3dWindow::InitWindowManager() {
         case WindowBackend::FAST3D_SDL_METAL:
             mRenderingApi = new GfxRenderingAPIMetal();
             mWindowManagerApi = new GfxWindowBackendSDL2();
+            break;
+#endif
+#ifdef ENABLE_DEKO3D
+        case WindowBackend::FAST3D_DEKO3D:
+            // Window backend is constructed first: it owns dk::Device/Queue/Swapchain on nwindowGetDefault(). The
+            // rendering API borrows the queue/cmdbuf from it (mirrors the GfxWindowBackendDXGI/GfxRenderingAPIDX11
+            // ownership split).
+            mWindowManagerApi = new GfxWindowBackendDeko();
+            mRenderingApi = new GfxRenderingAPIDeko(static_cast<GfxWindowBackendDeko*>(mWindowManagerApi));
             break;
 #endif
         default:
@@ -401,6 +421,8 @@ std::string Fast3dWindow::GetWindowBackendName() {
             return "OpenGL";
         case WindowBackend::FAST3D_SDL_METAL:
             return "Metal";
+        case WindowBackend::FAST3D_DEKO3D:
+            return "deko3d";
         default:
             return "";
     }
