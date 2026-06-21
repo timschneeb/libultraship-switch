@@ -25,7 +25,7 @@ void SDLGyroMapping::Recalibrate() {
                                                  ->GetConnectedSDLGamepadsForPort(mPortIndex)) {
 #ifdef __SWITCH__
         int playerIndex = SwitchController::GetDeviceSlot(instanceId);
-        if (playerIndex >= 0 && playerIndex < 4) {
+        if (playerIndex >= 0 && playerIndex < 8) {
             float pitch = 0.0f, yaw = 0.0f, roll = 0.0f;
             if (SwitchController::GetInstance().ReadGyro(static_cast<uint8_t>(playerIndex), pitch, yaw, roll)) {
                 mNeutralPitch = pitch;
@@ -72,7 +72,7 @@ void SDLGyroMapping::UpdatePad(float& x, float& y) {
                                                  ->GetConnectedSDLGamepadsForPort(mPortIndex)) {
 #ifdef __SWITCH__
         int playerIndex = SwitchController::GetDeviceSlot(instanceId);
-        if (playerIndex >= 0 && playerIndex < 4) {
+        if (playerIndex >= 0 && playerIndex < 8) {
             float pitch = 0.0f, yaw = 0.0f, roll = 0.0f;
             if (SwitchController::GetInstance().ReadGyro(static_cast<uint8_t>(playerIndex), pitch, yaw, roll)) {
                 x = (pitch - mNeutralPitch) * mSensitivity;

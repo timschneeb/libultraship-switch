@@ -65,7 +65,7 @@ SwitchController& SwitchController::GetInstance() {
 }
 
 HidNpadIdType SwitchController::GetNpadId(uint8_t portIndex) const {
-    const uint8_t clampedIndex = std::min<uint8_t>(portIndex, 3);
+    const uint8_t clampedIndex = std::min<uint8_t>(portIndex, 7);
     return static_cast<HidNpadIdType>(HidNpadIdType_No1 + clampedIndex);
 }
 

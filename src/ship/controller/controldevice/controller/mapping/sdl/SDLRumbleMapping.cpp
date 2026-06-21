@@ -24,7 +24,7 @@ void SDLRumbleMapping::StartRumble() {
                                                  ->GetConnectedSDLGamepadsForPort(mPortIndex)) {
 #ifdef __SWITCH__
         int playerIndex = SwitchController::GetDeviceSlot(instanceId);
-        if (playerIndex >= 0 && playerIndex < 4) {
+        if (playerIndex >= 0 && playerIndex < 8) {
             SwitchController::GetInstance().SendRumble(static_cast<uint8_t>(playerIndex),
                                                        mLowFrequencyIntensityPercentage / 100.0f,
                                                        mHighFrequencyIntensityPercentage / 100.0f);
@@ -42,7 +42,7 @@ void SDLRumbleMapping::StopRumble() {
                                                  ->GetConnectedSDLGamepadsForPort(mPortIndex)) {
 #ifdef __SWITCH__
         int playerIndex = SwitchController::GetDeviceSlot(instanceId);
-        if (playerIndex >= 0 && playerIndex < 4) {
+        if (playerIndex >= 0 && playerIndex < 8) {
             SwitchController::GetInstance().SendRumble(static_cast<uint8_t>(playerIndex), 0.0f, 0.0f);
         }
 #else
