@@ -22,6 +22,14 @@ class SwitchController {
     static SwitchController& GetInstance();
     bool ReadGyro(uint8_t portIndex, float& pitch, float& yaw, float& roll);
     void SendRumble(uint8_t portIndex, float lowFrequencyAmplitude, float highFrequencyAmplitude);
+    bool IsNpadConnected(uint8_t portIndex);
+    std::string GetControllerName(uint8_t portIndex);
+    std::string GetControllerSerial(uint8_t npadIndex);
+
+    static void RegisterDevice(int32_t instanceId, int32_t slot, const std::string& serial);
+    static void ClearDeviceSlots();
+    static int32_t GetDeviceSlot(int32_t instanceId);
+    static std::string GetDeviceSerial(int32_t instanceId);
 
   private:
     SwitchController() = default;

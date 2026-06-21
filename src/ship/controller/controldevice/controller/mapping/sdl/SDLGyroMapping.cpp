@@ -19,27 +19,22 @@ SDLGyroMapping::SDLGyroMapping(uint8_t portIndex, float sensitivity, float neutr
 }
 
 void SDLGyroMapping::Recalibrate() {
-#ifdef __SWITCH__
-    float pitch = 0.0f;
-    float yaw = 0.0f;
-    float roll = 0.0f;
-    if (SwitchController::GetInstance().ReadGyro(mPortIndex, pitch, yaw, roll)) {
-        mNeutralPitch = pitch;
-        mNeutralYaw = yaw;
-        mNeutralRoll = roll;
-        return;
-    }
-
-    mNeutralPitch = 0.0f;
-    mNeutralYaw = 0.0f;
-    mNeutralRoll = 0.0f;
-    return;
-#endif
-
     for (const auto& [instanceId, gamepad] : Context::GetRawInstance()
                                                  ->GetControlDeck()
                                                  ->GetConnectedPhysicalDeviceManager()
                                                  ->GetConnectedSDLGamepadsForPort(mPortIndex)) {
+#ifdef __SWITCH__
+        int playerIndex = SwitchController::GetDeviceSlot(instanceId);
+        if (playerIndex >= 0 && playerIndex < 4) {
+            float pitch = 0.0f, yaw = 0.0f, roll = 0.0f;
+            if (SwitchController::GetInstance().ReadGyro(static_cast<uint8_t>(playerIndex), pitch, yaw, roll)) {
+                mNeutralPitch = pitch;
+                mNeutralYaw = yaw;
+                mNeutralRoll = roll;
+                return;
+            }
+        }
+#else
         if (!SDL_GameControllerHasSensor(gamepad, SDL_SENSOR_GYRO)) {
             continue;
         }
@@ -53,6 +48,7 @@ void SDLGyroMapping::Recalibrate() {
         mNeutralYaw = gyroData[1];
         mNeutralRoll = gyroData[2];
         return;
+#endif
     }
 
     // if we didn't find a gyro device zero everything out
@@ -62,25 +58,7 @@ void SDLGyroMapping::Recalibrate() {
 }
 
 void SDLGyroMapping::UpdatePad(float& x, float& y) {
-#ifdef __SWITCH__
-    float pitch = 0.0f;
-    float yaw = 0.0f;
-    float roll = 0.0f;
-    if (!SwitchController::GetInstance().ReadGyro(mPortIndex, pitch, yaw, roll)) {
-        x = 0.0f;
-        y = 0.0f;
-        return;
-    }
-
-    x = (pitch - mNeutralPitch) * mSensitivity;
-    y = (yaw - mNeutralYaw) * mSensitivity;
-    return;
-#else
-    /*
-     * Skip this check on Switch since it will make the gyro preview non-functional
-     * when the menu gamepad navigation is on. It's not a big deal to not block gyro while in a menu as it is used
-     * rarely anyways.
-     */
+#ifndef __SWITCH__
     if (Context::GetRawInstance()->GetControlDeck()->GamepadGameInputBlocked()) {
         x = 0;
         y = 0;
@@ -92,6 +70,17 @@ void SDLGyroMapping::UpdatePad(float& x, float& y) {
                                                  ->GetControlDeck()
                                                  ->GetConnectedPhysicalDeviceManager()
                                                  ->GetConnectedSDLGamepadsForPort(mPortIndex)) {
+#ifdef __SWITCH__
+        int playerIndex = SwitchController::GetDeviceSlot(instanceId);
+        if (playerIndex >= 0 && playerIndex < 4) {
+            float pitch = 0.0f, yaw = 0.0f, roll = 0.0f;
+            if (SwitchController::GetInstance().ReadGyro(static_cast<uint8_t>(playerIndex), pitch, yaw, roll)) {
+                x = (pitch - mNeutralPitch) * mSensitivity;
+                y = (yaw - mNeutralYaw) * mSensitivity;
+                return;
+            }
+        }
+#else
         if (!SDL_GameControllerHasSensor(gamepad, SDL_SENSOR_GYRO)) {
             continue;
         }
@@ -104,6 +93,7 @@ void SDLGyroMapping::UpdatePad(float& x, float& y) {
         x = (gyroData[0] - mNeutralPitch) * mSensitivity;
         y = (gyroData[1] - mNeutralYaw) * mSensitivity;
         return;
+#endif
     }
 
     // if we didn't find a gyro device zero everything out
@@ -151,7 +141,7 @@ void SDLGyroMapping::EraseFromConfig() {
 
 std::string SDLGyroMapping::GetPhysicalDeviceName() {
 #ifdef __SWITCH__
-    return "Switch Controller";
+    return SwitchController::GetInstance().GetControllerName(mPortIndex);
 #endif
     return "SDL Gamepad";
 }

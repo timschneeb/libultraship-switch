@@ -8,7 +8,6 @@
 #include <spdlog/spdlog.h>
 #include "ship/Context.h"
 #include "ship/audio/Audio.h"
-#include "ship/utils/StringHelper.h"
 
 #define DOCKED_MODE 1
 #define HANDHELD_MODE 0
@@ -16,8 +15,6 @@
 static AppletHookCookie applet_hook_cookie;
 static bool isRunning = true;
 static bool hasFocus = true;
-
-HidsysUniquePadId uniquePadIds[8];
 
 void DetectAppletMode();
 
@@ -28,9 +25,9 @@ void Ship::Switch::Init(SwitchPhase phase) {
         case PreInitPhase:
             DetectAppletMode();
             socketInitializeDefault();
-#ifdef _DEBUG
+//#ifdef _DEBUG
             nxlinkStdio();
-#endif
+//#endif
             break;
         case PostInitPhase:
             appletInitializeGamePlayRecording();
@@ -41,9 +38,10 @@ void Ship::Switch::Init(SwitchPhase phase) {
                 clkrstInitialize();
             }
             hidsysInitialize();
-            padConfigureInput(8, HidNpadStyleSet_NpadStandard);
-            s32 total = 0; // unused
-            hidsysGetUniquePadIds(uniquePadIds, 8, &total);
+            padConfigureInput(8, HidNpadStyleSet_NpadStandard | HidNpadStyleTag_NpadGc |
+                                  HidNpadStyleTag_NpadLark | HidNpadStyleTag_NpadHandheldLark |
+                                  HidNpadStyleTag_NpadLucia | HidNpadStyleTag_NpadLagon |
+                                  HidNpadStyleTag_NpadLager | HidNpadStyleTag_NpadSystemExt | HidNpadStyleTag_NpadSystem);
             break;
     }
 }
@@ -113,15 +111,6 @@ void Ship::Switch::ApplyOverclock(void) {
             clkrstCloseSession(&session);
         }
     }
-}
-
-char* Ship::Switch::GetControllerUUID(int controller) {
-    HidsysUniquePadSerialNumber serial;
-    hidsysGetUniquePadSerialNumber(uniquePadIds[controller], &serial);
-    char* cuid = serial.serial_number;
-    return SDL_strdup(strlen(cuid) >= 14 && cuid[0] == 'X' && cuid[1] == 'C'
-                          ? cuid
-                          : StringHelper::Sprintf("CID%d0000000000", controller).c_str());
 }
 
 static void on_applet_hook(AppletHookType hook, void* param) {

@@ -18,31 +18,36 @@ SDLRumbleMapping::SDLRumbleMapping(uint8_t portIndex, uint8_t lowFrequencyIntens
 }
 
 void SDLRumbleMapping::StartRumble() {
-#ifdef __SWITCH__
-    SwitchController::GetInstance().SendRumble(mPortIndex, mLowFrequencyIntensityPercentage / 100.0f,
-                                               mHighFrequencyIntensityPercentage / 100.0f);
-    return;
-#endif
-
     for (const auto& [instanceId, gamepad] : Context::GetRawInstance()
                                                  ->GetControlDeck()
                                                  ->GetConnectedPhysicalDeviceManager()
                                                  ->GetConnectedSDLGamepadsForPort(mPortIndex)) {
+#ifdef __SWITCH__
+        int playerIndex = SwitchController::GetDeviceSlot(instanceId);
+        if (playerIndex >= 0 && playerIndex < 4) {
+            SwitchController::GetInstance().SendRumble(static_cast<uint8_t>(playerIndex),
+                                                       mLowFrequencyIntensityPercentage / 100.0f,
+                                                       mHighFrequencyIntensityPercentage / 100.0f);
+        }
+#else
         SDL_GameControllerRumble(gamepad, mLowFrequencyIntensity, mHighFrequencyIntensity, 0);
+#endif
     }
 }
 
 void SDLRumbleMapping::StopRumble() {
-#ifdef __SWITCH__
-    SwitchController::GetInstance().SendRumble(mPortIndex, 0.0f, 0.0f);
-    return;
-#endif
-
     for (const auto& [instanceId, gamepad] : Context::GetRawInstance()
                                                  ->GetControlDeck()
                                                  ->GetConnectedPhysicalDeviceManager()
                                                  ->GetConnectedSDLGamepadsForPort(mPortIndex)) {
+#ifdef __SWITCH__
+        int playerIndex = SwitchController::GetDeviceSlot(instanceId);
+        if (playerIndex >= 0 && playerIndex < 4) {
+            SwitchController::GetInstance().SendRumble(static_cast<uint8_t>(playerIndex), 0.0f, 0.0f);
+        }
+#else
         SDL_GameControllerRumble(gamepad, 0, 0, 0);
+#endif
     }
 }
 
@@ -88,7 +93,7 @@ void SDLRumbleMapping::EraseFromConfig() {
 
 std::string SDLRumbleMapping::GetPhysicalDeviceName() {
 #ifdef __SWITCH__
-    return "Switch Controller";
+    return SwitchController::GetInstance().GetControllerName(mPortIndex);
 #endif
     return "SDL Gamepad";
 }
