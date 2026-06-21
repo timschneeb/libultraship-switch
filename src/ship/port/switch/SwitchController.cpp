@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <unordered_map>
 #include "ship/utils/StringHelper.h"
+#include "ship/Context.h"
+#include "ship/controller/controldeck/ControlDeck.h"
 
 namespace Ship {
 
@@ -28,6 +30,33 @@ int32_t SwitchController::GetDeviceSlot(int32_t instanceId) {
 std::string SwitchController::GetDeviceSerial(int32_t instanceId) {
     auto it = sInstanceIdToSerial.find(instanceId);
     return (it != sInstanceIdToSerial.end()) ? it->second : "";
+}
+
+void SwitchController::Update() {
+    // Called every frame.
+    // We only poll for controller connection changes every 60 frames.
+    static int sFrameCounter = 0;
+    if (++sFrameCounter < 60) {
+        return;
+    }
+    sFrameCounter = 0;
+
+    // Check for connection changes
+    static bool sLastConnected[4] = {};
+    bool changed = false;
+    for (uint8_t i = 0; i < 4; i++) {
+        bool connected = GetInstance().IsNpadConnected(i);
+        if (connected != sLastConnected[i]) {
+            sLastConnected[i] = connected;
+            changed = true;
+        }
+    }
+    if (changed) {
+        auto context = Context::GetRawInstance();
+        if (context && context->GetControlDeck()) {
+            context->GetControlDeck()->GetConnectedPhysicalDeviceManager()->HandlePhysicalDeviceConnect(0);
+        }
+    }
 }
 
 SwitchController& SwitchController::GetInstance() {
@@ -167,7 +196,7 @@ void SwitchController::SendRumble(uint8_t portIndex, float lowFrequencyAmplitude
     }
 }
 
-bool SwitchController::IsNpadConnected(uint8_t portIndex) {
+bool SwitchController::IsNpadConnected(uint8_t portIndex) const {
     if (portIndex >= mControllers.size()) {
         return false;
     }
@@ -186,6 +215,7 @@ std::string SwitchController::GetControllerName(uint8_t portIndex) {
     if (!EnsureInitialized(portIndex)) {
         return "Controller";
     }
+
     auto& controller = mControllers[portIndex];
     padUpdate(&controller.State);
     const uint32_t styleSet = padGetStyleSet(&controller.State);

@@ -2,6 +2,9 @@
 #include <SDL2/SDL.h>
 #include "ship/Context.h"
 #include "ship/controller/controldeck/ControlDeck.h"
+#ifdef __SWITCH__
+#include "ship/port/switch/SwitchController.h"
+#endif
 
 namespace Ship {
 
@@ -32,5 +35,9 @@ void SDLAddRemoveDeviceEventHandler::UpdateElement() {
             ->GetConnectedPhysicalDeviceManager()
             ->HandlePhysicalDeviceDisconnect(event.cdevice.which);
     }
+
+#ifdef __SWITCH__
+    SwitchController::Update();
+#endif
 }
 } // namespace Ship
