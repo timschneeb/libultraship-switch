@@ -25,9 +25,9 @@ void Ship::Switch::Init(SwitchPhase phase) {
         case PreInitPhase:
             DetectAppletMode();
             socketInitializeDefault();
-//#ifdef _DEBUG
+#ifdef _DEBUG
             nxlinkStdio();
-//#endif
+#endif
             break;
         case PostInitPhase:
             appletInitializeGamePlayRecording();
