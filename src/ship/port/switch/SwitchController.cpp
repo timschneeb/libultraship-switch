@@ -113,26 +113,26 @@ bool SwitchController::ReadSixAxisState(uint8_t portIndex, HidSixAxisSensorState
     padUpdate(&controller.State);
     const uint64_t styleSet = padGetStyleSet(&controller.State);
 
-    if (styleSet & HidNpadStyleTag_NpadFullKey) {
-        hidGetSixAxisSensorStates(controller.Sensors[1], &state, 1);
-        return true;
-    }
-
     if (styleSet & HidNpadStyleTag_NpadJoyDual) {
         const uint64_t attributes = padGetAttributes(&controller.State);
         if (attributes & HidNpadAttribute_IsLeftConnected) {
             hidGetSixAxisSensorStates(controller.Sensors[2], &state, 1);
-            return true;
+            return state.delta_time > 0;
         }
         if (attributes & HidNpadAttribute_IsRightConnected) {
             hidGetSixAxisSensorStates(controller.Sensors[3], &state, 1);
-            return true;
+            return state.delta_time > 0;
         }
     }
 
     if (styleSet & HidNpadStyleTag_NpadHandheld) {
         hidGetSixAxisSensorStates(controller.Sensors[0], &state, 1);
-        return true;
+        return state.delta_time > 0;
+    }
+
+    if (styleSet & HidNpadStyleTag_NpadFullKey) {
+        hidGetSixAxisSensorStates(controller.Sensors[1], &state, 1);
+        return state.delta_time > 0;
     }
 
     return false;
