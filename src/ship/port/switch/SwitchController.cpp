@@ -96,6 +96,9 @@ bool SwitchController::EnsureInitialized(uint8_t portIndex) {
         hidStartSixAxisSensor(sensor);
     }
 
+    SPDLOG_INFO("Initialized controller for port {}: npadId={}, padMask={:#x}, styleSet={:#x}, deviceType={:#x}", portIndex,
+        static_cast<int>(npadId), padMask, padGetStyleSet(&controller.State), hidGetNpadDeviceType(npadId));
+
     controller.Initialized = true;
     return true;
 }
@@ -219,44 +222,54 @@ std::string SwitchController::GetControllerName(uint8_t portIndex) {
     auto& controller = mControllers[portIndex];
     padUpdate(&controller.State);
     const uint32_t styleSet = padGetStyleSet(&controller.State);
+    const uint32_t deviceType = hidGetNpadDeviceType(GetNpadId(portIndex));
 
     if (styleSet & HidNpadStyleTag_NpadHandheld) {
         return "Handheld";
     }
-    if (styleSet & HidNpadStyleTag_NpadJoyDual) {
-        return "Joy-Con (L+R)";
-    }
-    if (styleSet & HidNpadStyleTag_NpadJoyLeft) {
-        return "Joy-Con (L)";
-    }
-    if (styleSet & HidNpadStyleTag_NpadJoyRight) {
-        return "Joy-Con (R)";
-    }
     if (styleSet & HidNpadStyleTag_NpadGc) {
         return "GameCube Controller";
     }
-    if (styleSet & (HidNpadStyleTag_NpadLark | HidNpadStyleTag_NpadHandheldLark)) {
-        return "NES Controller";
-    }
-    if (styleSet & HidNpadStyleTag_NpadLucia) {
-        return "SNES Controller";
-    }
-    if (styleSet & HidNpadStyleTag_NpadLagon) {
-        return "N64 Controller";
-    }
-    if (styleSet & HidNpadStyleTag_NpadLager) {
-        return "Genesis Controller";
-    }
-    if (styleSet & HidNpadStyleTag_NpadFullKey) {
+
+    // Style sets are not precise enough for the other types
+    if (deviceType & HidDeviceTypeBits_FullKey) {
         return "Pro Controller";
     }
-    if (styleSet & HidNpadStyleTag_NpadSystemExt) {
-        return "External Generic Controller";
+    if (deviceType & HidDeviceTypeBits_DebugPad) {
+        return "DebugPad";
     }
-    if (styleSet & HidNpadStyleTag_NpadSystem) {
+    if (deviceType & HidDeviceTypeBits_Palma) {
+        return "Poke Ball Plus";
+    }
+    if (deviceType & HidDeviceTypeBits_Lucia) {
+        return "SNES Controller";
+    }
+    if (deviceType & HidDeviceTypeBits_Lagon) {
+        return "N64 Controller";
+    }
+    if (deviceType & HidDeviceTypeBits_Lager) {
+        return "Genesis Controller";
+    }
+    if (deviceType & HidDeviceTypeBits_System) {
         return "Generic Controller";
     }
-    return "Controller";
+#define DETECT_LR_CONTROLLER(deviceType, name, leftBits, rightBits) \
+    if ((deviceType) & ((leftBits) | (rightBits))) { \
+        bool l = (deviceType) & (leftBits); \
+        bool r = (deviceType) & (rightBits); \
+        return (l && r) ? name " (L+R)" : l ? name " (L)" : name " (R)"; \
+    }
+
+    DETECT_LR_CONTROLLER(deviceType, "Joy-Con",
+        HidDeviceTypeBits_JoyLeft, HidDeviceTypeBits_JoyRight)
+    DETECT_LR_CONTROLLER(deviceType, "Famicom Controller",
+        HidDeviceTypeBits_LarkHvcLeft | HidDeviceTypeBits_HandheldLarkHvcLeft,
+        HidDeviceTypeBits_LarkHvcRight | HidDeviceTypeBits_HandheldLarkHvcRight)
+    DETECT_LR_CONTROLLER(deviceType, "NES Controller",
+        HidDeviceTypeBits_LarkNesLeft | HidDeviceTypeBits_HandheldLarkNesLeft,
+        HidDeviceTypeBits_LarkNesRight | HidDeviceTypeBits_HandheldLarkNesRight)
+
+    return "Unknown Controller";
 }
 
 std::string SwitchController::GetControllerSerial(uint8_t npadIndex) {
