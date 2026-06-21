@@ -96,8 +96,9 @@ bool SwitchController::EnsureInitialized(uint8_t portIndex) {
         hidStartSixAxisSensor(sensor);
     }
 
-    SPDLOG_INFO("Initialized controller for port {}: npadId={}, padMask={:#x}, styleSet={:#x}, deviceType={:#x}", portIndex,
-        static_cast<int>(npadId), padMask, padGetStyleSet(&controller.State), hidGetNpadDeviceType(npadId));
+    SPDLOG_INFO("Initialized controller for port {}: npadId={}, padMask={:#x}, styleSet={:#x}, deviceType={:#x}",
+                portIndex, static_cast<int>(npadId), padMask, padGetStyleSet(&controller.State),
+                hidGetNpadDeviceType(npadId));
 
     controller.Initialized = true;
     return true;
@@ -253,21 +254,20 @@ std::string SwitchController::GetControllerName(uint8_t portIndex) {
     if (deviceType & HidDeviceTypeBits_System) {
         return "Generic Controller";
     }
-#define DETECT_LR_CONTROLLER(deviceType, name, leftBits, rightBits) \
-    if ((deviceType) & ((leftBits) | (rightBits))) { \
-        bool l = (deviceType) & (leftBits); \
-        bool r = (deviceType) & (rightBits); \
+#define DETECT_LR_CONTROLLER(deviceType, name, leftBits, rightBits)      \
+    if ((deviceType) & ((leftBits) | (rightBits))) {                     \
+        bool l = (deviceType) & (leftBits);                              \
+        bool r = (deviceType) & (rightBits);                             \
         return (l && r) ? name " (L+R)" : l ? name " (L)" : name " (R)"; \
     }
 
-    DETECT_LR_CONTROLLER(deviceType, "Joy-Con",
-        HidDeviceTypeBits_JoyLeft, HidDeviceTypeBits_JoyRight)
+    DETECT_LR_CONTROLLER(deviceType, "Joy-Con", HidDeviceTypeBits_JoyLeft, HidDeviceTypeBits_JoyRight)
     DETECT_LR_CONTROLLER(deviceType, "Famicom Controller",
-        HidDeviceTypeBits_LarkHvcLeft | HidDeviceTypeBits_HandheldLarkHvcLeft,
-        HidDeviceTypeBits_LarkHvcRight | HidDeviceTypeBits_HandheldLarkHvcRight)
+                         HidDeviceTypeBits_LarkHvcLeft | HidDeviceTypeBits_HandheldLarkHvcLeft,
+                         HidDeviceTypeBits_LarkHvcRight | HidDeviceTypeBits_HandheldLarkHvcRight)
     DETECT_LR_CONTROLLER(deviceType, "NES Controller",
-        HidDeviceTypeBits_LarkNesLeft | HidDeviceTypeBits_HandheldLarkNesLeft,
-        HidDeviceTypeBits_LarkNesRight | HidDeviceTypeBits_HandheldLarkNesRight)
+                         HidDeviceTypeBits_LarkNesLeft | HidDeviceTypeBits_HandheldLarkNesLeft,
+                         HidDeviceTypeBits_LarkNesRight | HidDeviceTypeBits_HandheldLarkNesRight)
 
     return "Unknown Controller";
 }
