@@ -92,9 +92,6 @@ void SDLRumbleMapping::EraseFromConfig() {
 }
 
 std::string SDLRumbleMapping::GetPhysicalDeviceName() {
-#ifdef __SWITCH__
-    return SwitchController::GetInstance().GetControllerName(mPortIndex);
-#endif
     return "SDL Gamepad";
 }
 } // namespace Ship

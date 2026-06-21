@@ -140,9 +140,6 @@ void SDLGyroMapping::EraseFromConfig() {
 }
 
 std::string SDLGyroMapping::GetPhysicalDeviceName() {
-#ifdef __SWITCH__
-    return SwitchController::GetInstance().GetControllerName(mPortIndex);
-#endif
     return "SDL Gamepad";
 }
 } // namespace Ship
