@@ -38,16 +38,17 @@ void Ship::Switch::Init(SwitchPhase phase) {
                 clkrstInitialize();
             }
             hidsysInitialize();
-            padConfigureInput(8, HidNpadStyleSet_NpadStandard | HidNpadStyleTag_NpadGc |
-                                  HidNpadStyleTag_NpadLark | HidNpadStyleTag_NpadHandheldLark |
-                                  HidNpadStyleTag_NpadLucia | HidNpadStyleTag_NpadLagon |
-                                  HidNpadStyleTag_NpadLager | HidNpadStyleTag_NpadSystemExt | HidNpadStyleTag_NpadSystem);
+            padConfigureInput(8, HidNpadStyleSet_NpadStandard | HidNpadStyleTag_NpadGc | HidNpadStyleTag_NpadLark |
+                                     HidNpadStyleTag_NpadHandheldLark | HidNpadStyleTag_NpadLucia |
+                                     HidNpadStyleTag_NpadLagon | HidNpadStyleTag_NpadLager |
+                                     HidNpadStyleTag_NpadSystemExt | HidNpadStyleTag_NpadSystem);
             break;
     }
 }
 
 void Ship::Switch::Exit() {
     Keyboard::Close();
+    hidsysExit();
     socketExit();
     clkrstExit();
     appletSetGamePlayRecordingState(false);
