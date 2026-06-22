@@ -13,8 +13,8 @@
 #include "fast/backends/gfx_direct3d11.h"
 
 #ifdef ENABLE_DEKO3D
-#include "fast/backends/gfx_deko_window.h"
-#include "fast/backends/gfx_deko.h"
+#include "fast/backends/gfx_deko3d_window.h"
+#include "fast/backends/gfx_deko3d.h"
 #endif
 
 #include "fast/backends/gfx_window_manager_api.h"
@@ -171,8 +171,8 @@ void Fast3dWindow::InitWindowManager() {
             // Window backend is constructed first: it owns dk::Device/Queue/Swapchain on nwindowGetDefault(). The
             // rendering API borrows the queue/cmdbuf from it (mirrors the GfxWindowBackendDXGI/GfxRenderingAPIDX11
             // ownership split).
-            mWindowManagerApi = new GfxWindowBackendDeko();
-            mRenderingApi = new GfxRenderingAPIDeko(static_cast<GfxWindowBackendDeko*>(mWindowManagerApi));
+            mWindowManagerApi = new GfxWindowBackendDeko3d();
+            mRenderingApi = new GfxRenderingApiDeko3d(static_cast<GfxWindowBackendDeko3d*>(mWindowManagerApi));
             break;
 #endif
         default:

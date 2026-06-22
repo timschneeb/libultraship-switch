@@ -2,18 +2,18 @@
 
 #if defined(ENABLE_DEKO3D)
 #include "gfx_rendering_api.h"
-#include "gfx_deko_window.h"
+#include "gfx_deko3d_window.h"
 
 namespace Fast {
-struct ShaderProgramDeko {
+struct ShaderProgramDeko3d {
     std::uint64_t ShaderId1 = 0;
     std::uint64_t ShaderId2 = 0;
 };
 
-class GfxRenderingAPIDeko final : public GfxRenderingAPI {
+class GfxRenderingApiDeko3d final : public GfxRenderingAPI {
   public:
-    explicit GfxRenderingAPIDeko(GfxWindowBackendDeko* windowBackend);
-    ~GfxRenderingAPIDeko() override = default;
+    explicit GfxRenderingApiDeko3d(GfxWindowBackendDeko3d* windowBackend);
+    ~GfxRenderingApiDeko3d() override = default;
 
     const char* GetName() override;
     int GetMaxTextureSize() override;
@@ -91,7 +91,7 @@ class GfxRenderingAPIDeko final : public GfxRenderingAPI {
     void SelectTextureFb(int fbId) override;
 
   private:
-    GfxWindowBackendDeko* mWindowBackend = nullptr;
+    GfxWindowBackendDeko3d* mWindowBackend = nullptr;
     FilteringMode mTextureFilter = FILTER_THREE_POINT;
 };
 } // namespace Fast

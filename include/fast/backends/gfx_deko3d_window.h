@@ -11,16 +11,16 @@ namespace Fast {
  * @brief: Window/timing/presentation backend for deko3d.
  *
  * Ownership: this class owns dk::Device, dk::Queue, and dk::Swapchain bound to nWindowGetDefault().
- * GfxRenderingAPIDeko borrows the queue and the per-frame command buffer from here to record draws; presentation lives
- * here.
+ * GfxRenderingApiDeko3d borrows the queue and the per-frame command buffer from here to record draws; presentation
+ * lives here.
  *
  * SDL is initialized for input/events only (no SDL_INIT_VIDEO), so deko3d owns the applet's default window cleanly and
  * the existing SDL controller-mapping layer keeps working.
  */
-class GfxWindowBackendDeko final : public GfxWindowBackend {
+class GfxWindowBackendDeko3d final : public GfxWindowBackend {
   public:
-    GfxWindowBackendDeko() = default;
-    ~GfxWindowBackendDeko() override;
+    GfxWindowBackendDeko3d() = default;
+    ~GfxWindowBackendDeko3d() override;
 
     void Init(const char* gameName, const char* apiName, bool startFullScreen, std::uint32_t width,
               std::uint32_t height, std::int32_t posX, std::int32_t posY) override;
@@ -97,10 +97,13 @@ class GfxWindowBackendDeko final : public GfxWindowBackend {
     static constexpr std::uint8_t sFramebuffers = 2;
 
   private:
-    void CreateDekoDevice();
+    void CreateDeko3dDevice();
     void CreateSwapChain(std::uint32_t width, std::uint32_t height);
     void DestroySwapChain();
     void RecordClearCommandLists();
+    // Load a single-stage .dksh from romfs into the shared shader code memblock.  Removed with the rest of the
+    // scaffolding once GfxRenderingApiDeko3d records real draws.
+    bool LoadDeko3dShader(dk::Shader& shader, const char* path);
 
     // deko3d core objects (owned).
     dk::UniqueDevice mDevice = {};
@@ -109,12 +112,18 @@ class GfxWindowBackendDeko final : public GfxWindowBackend {
 
     // Framebuffer images live in a single GPU-cached image memblock.
     dk::UniqueMemBlock mFbMemBlock = {};
-    std::array<dk::Image, sFramebuffers> mFramebuffers;
+    std::array<dk::Image, sFramebuffers> mFramebuffers = {};
 
     // Command memory + a cmdbuf holding the pre-recorded per-slot clear lists.
     dk::UniqueMemBlock mCmdMemBlock = {};
     dk::UniqueCmdBuf mCmdBuf = {};
-    std::array<DkCmdList, sFramebuffers> mClearCmdLists{};
+    std::array<DkCmdList, sFramebuffers> mClearCmdLists = {};
+
+    // shader code memory + the two tracer shaders, plus a running bump offset into the code memblock.
+    dk::UniqueMemBlock mShaderCodeMemBlock = {};
+    dk::Shader mTracerVsh = {};
+    dk::Shader mTracerFsh = {};
+    std::uint32_t mShaderCodeOffset = 0;
 
     std::uint32_t mWidth = 1280;
     std::uint32_t mHeight = 720;

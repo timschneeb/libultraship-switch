@@ -1,5 +1,7 @@
 #if defined(ENABLE_DEKO3D)
-#include "fast/backends/gfx_deko_window.h"
+#include "fast/backends/gfx_deko3d_window.h"
+
+#include <vector>
 
 #include <switch.h>
 #include <spdlog/spdlog.h>
@@ -11,7 +13,18 @@
 namespace Fast {
 
 namespace {
-constexpr std::uint32_t gCmdMemSize = 0x10000; // 64 KiB
+constexpr std::uint32_t gCmdMemSize = 0x10000;       // 64 KiB
+constexpr std::uint32_t gShaderCodeMemSize = 0x10000; // 64 KiB
+
+// .dksh on-disk layout: [control section (control_sz bytes, starts with this header)][code section (code_sz bytes)]
+struct DkshHeader {
+    std::uint32_t Magic = 0;
+    std::uint32_t HeaderSz = 0;
+    std::uint32_t ControlSz = 0;
+    std::uint32_t CodeSz = 0;
+    std::uint32_t ProgramsOff = 0;
+    std::uint32_t NumPrograms = 0;
+};
 
 std::uint32_t AlignUp(std::uint32_t value, std::uint32_t alignment) {
     return value + alignment - 1 & ~(alignment - 1);
@@ -20,8 +33,8 @@ std::uint32_t AlignUp(std::uint32_t value, std::uint32_t alignment) {
 // Crash-synchronous trace.  The release logger is an async_logger, so its queue (and any flush_onrequest) is lost when
 // deko3d's fatal handler calls svcBreak().  Open/write/close per line so the entry is durably on disk before any
 // subsequent abort.
-void DekoTrace(const char* message) {
-    static const auto sPath = Ship::Context::GetPathRelativeToAppDirectory("logs/deko_trace.log");
+void Deko3dTrace(const char* message) {
+    static const auto sPath = Ship::Context::GetPathRelativeToAppDirectory("logs/deko3d_trace.log");
     if (const auto file = std::fopen(sPath.c_str(), "a")) {
         std::fputs(message, file);
         std::fputc('\n', file);
@@ -32,20 +45,20 @@ void DekoTrace(const char* message) {
 }
 
 // deko3d routes API misuse and fatal errors here.  Without a callback, the default response to a fatal is svcBreak().
-void DekoDebugCallback(void* userData, const char* context, DkResult result, const char* message) {
+void Deko3dDebugCallback(void* userData, const char* context, DkResult result, const char* message) {
     char buffer[512];
     std::snprintf(buffer, sizeof(buffer), "[deko3d] result=%d, context='%s': %s", static_cast<int>(result),
                   context ? context : "(null)", message ? message : "(null)");
-    DekoTrace(buffer);
+    Deko3dTrace(buffer);
 }
 } // namespace
 
-GfxWindowBackendDeko::~GfxWindowBackendDeko() {
+GfxWindowBackendDeko3d::~GfxWindowBackendDeko3d() {
     Destroy();
 }
 
-void GfxWindowBackendDeko::CreateDekoDevice() {
-    mDevice = dk::DeviceMaker{}.setCbDebug(DekoDebugCallback).create();
+void GfxWindowBackendDeko3d::CreateDeko3dDevice() {
+    mDevice = dk::DeviceMaker{}.setCbDebug(Deko3dDebugCallback).create();
     mQueue = dk::QueueMaker{ mDevice }.setFlags(DkQueueFlags_Graphics).create();
 
     mCmdMemBlock = dk::MemBlockMaker{ mDevice, AlignUp(gCmdMemSize, DK_MEMBLOCK_ALIGNMENT) }
@@ -53,9 +66,16 @@ void GfxWindowBackendDeko::CreateDekoDevice() {
                        .create();
     mCmdBuf = dk::CmdBufMaker{ mDevice }.create();
     mCmdBuf.addMemory(mCmdMemBlock, 0, gCmdMemSize);
+
+    // GPU code memory for the tracer shaders.  Code memblocks reserve DK_SHADER_CODE_UNUSABLE_SIZE at the start, so we
+    // begin allocating at the first DK_SHADER_CODE_ALIGNMENT boundary past it.
+    mShaderCodeMemBlock = dk::MemBlockMaker{ mDevice, AlignUp(gShaderCodeMemSize, DK_MEMBLOCK_ALIGNMENT) }
+                              .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached | DkMemBlockFlags_Code)
+                              .create();
+    mShaderCodeOffset = DK_SHADER_CODE_ALIGNMENT;
 }
 
-void GfxWindowBackendDeko::CreateSwapChain(std::uint32_t width, std::uint32_t height) {
+void GfxWindowBackendDeko3d::CreateSwapChain(std::uint32_t width, std::uint32_t height) {
     mWidth = width;
     mHeight = height;
 
@@ -86,7 +106,7 @@ void GfxWindowBackendDeko::CreateSwapChain(std::uint32_t width, std::uint32_t he
     RecordClearCommandLists();
 }
 
-void GfxWindowBackendDeko::RecordClearCommandLists() {
+void GfxWindowBackendDeko3d::RecordClearCommandLists() {
     // Pre-record one bind+clear list per framebuffer. The lists coexist in mCmdBuf's memory (no clear() between
     // recordings), so per frame we only acquire -> submit[slot] -> present.
     mCmdBuf.clear();
@@ -98,11 +118,68 @@ void GfxWindowBackendDeko::RecordClearCommandLists() {
                              { { 0.0f, 0.0f, static_cast<float>(mWidth), static_cast<float>(mHeight), 0.0f, 1.0f } });
         mCmdBuf.setScissors(0, { { 0, 0, mWidth, mHeight } });
         mCmdBuf.clearColor(0, DkColorMask_RGBA, 1.0f, 0.0f, 1.0f, 1.0f);
+
+        // Bind the tracer shaders + minimal pipeline state and draw a gl_VertexID triangle.  The RT, viewport, and
+        // scissor are already bound above.  No depth attachment, so depth test is off; cull off so winding is
+        // irrelevant; no vertex attributes (positions come from gl_VertexID).  Removed once the rapi draws.
+        mCmdBuf.bindShaders(DkStageFlag_GraphicsMask, { &mTracerVsh, &mTracerFsh });
+        mCmdBuf.bindRasterizerState(dk::RasterizerState{}.setCullMode(DkFace_None));
+        mCmdBuf.bindColorState(dk::ColorState{});
+        mCmdBuf.bindColorWriteState(dk::ColorWriteState{});
+        mCmdBuf.bindDepthStencilState(dk::DepthStencilState{}.setDepthTestEnable(false));
+        mCmdBuf.bindVtxAttribState({});
+        mCmdBuf.bindVtxBufferState({});
+        mCmdBuf.draw(DkPrimitive_Triangles, 3, 1, 0, 0);
+
         mClearCmdLists[i] = mCmdBuf.finishList();
     }
 }
 
-void GfxWindowBackendDeko::DestroySwapChain() {
+bool GfxWindowBackendDeko3d::LoadDeko3dShader(dk::Shader& shader, const char* path) {
+    const auto file = std::fopen(path, "rb");
+    if (!file) {
+        return false;
+    }
+
+    DkshHeader dksh = {};
+    if (std::fread(&dksh, sizeof(dksh), 1, file) != 1) {
+        std::fclose(file);
+        return false;
+    }
+
+    // Control section is consumed by dkShaderInitialize and not needed afterward.  It's the first control_sz bytes.
+    std::vector<std::uint8_t> control(dksh.ControlSz);
+    std::rewind(file);
+
+    if (std::fread(control.data(), dksh.ControlSz, 1, file) != 1) {
+        std::fclose(file);
+        return false;
+    }
+
+    // Code section follows the control section in the file; it lives in GPU code memory.
+    const std::uint32_t codeOffset = mShaderCodeOffset;
+    if (codeOffset + dksh.CodeSz > gShaderCodeMemSize) {
+        std::fclose(file);
+        return false; // Code pool too small
+    }
+
+    std::fseek(file, dksh.ControlSz, SEEK_SET);
+    {
+        if (const auto codeCpu = static_cast<std::uint8_t*>(mShaderCodeMemBlock.getCpuAddr()) + codeOffset;
+            std::fread(codeCpu, dksh.CodeSz, 1, file) != 1) {
+            std::fclose(file);
+            return false;
+        }
+    }
+    std::fclose(file);
+
+    dk::ShaderMaker{ mShaderCodeMemBlock, codeOffset }.setControl(control.data()).setProgramId(0).initialize(shader);
+
+    mShaderCodeOffset += AlignUp(dksh.CodeSz, DK_SHADER_CODE_ALIGNMENT);
+    return true;
+}
+
+void GfxWindowBackendDeko3d::DestroySwapChain() {
     if (mQueue) {
         mQueue.waitIdle();
     }
@@ -112,9 +189,9 @@ void GfxWindowBackendDeko::DestroySwapChain() {
     mClearCmdLists = {};
 }
 
-void GfxWindowBackendDeko::Init(const char* gameName, const char* apiName, bool startFullScreen, std::uint32_t width,
-                                std::uint32_t height, std::int32_t posX, std::int32_t posY) {
-    DekoTrace("Init: enter");
+void GfxWindowBackendDeko3d::Init(const char* gameName, const char* apiName, bool startFullScreen, std::uint32_t width,
+                                  std::uint32_t height, std::int32_t posX, std::int32_t posY) {
+    Deko3dTrace("Init: enter");
 
     // Input/events only
     if (SDL_Init(SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK | SDL_INIT_EVENTS) != 0) {
@@ -124,9 +201,24 @@ void GfxWindowBackendDeko::Init(const char* gameName, const char* apiName, bool 
     mWidth = width ? width : 1280;
     mHeight = height ? height : 720;
 
-    DekoTrace("Init: creating device/queue/cmdbuf");
-    CreateDekoDevice();
-    DekoTrace("Init: creating swap chain");
+    Deko3dTrace("Init: creating device/queue/cmdbuf");
+    CreateDeko3dDevice();
+
+    // SoH normally doesn't mount the nro's embedded romfs, so do it here for the .dksh blobs.  Load before
+    // CreateSwapChain() because RecordClearCommandLists() bind these shaders.
+    if (R_FAILED(romfsInit())) {
+        Deko3dTrace("Init: romfsInit failed (no embedded romfs?)");
+    }
+
+    if (!LoadDeko3dShader(mTracerVsh, "romfs:/shaders/deko3d/tracer.vert.dksh")) {
+        Deko3dTrace("Init: tracer vsh load failed");
+    }
+
+    if (!LoadDeko3dShader(mTracerFsh, "romfs:/shaders/deko3d/tracer.frag.dksh")) {
+        Deko3dTrace("Init: tracer fsh load failed");
+    }
+
+    Deko3dTrace("Init: creating swap chain");
     CreateSwapChain(mWidth, mHeight);
     mIsInitialized = true;
 
@@ -138,10 +230,10 @@ void GfxWindowBackendDeko::Init(const char* gameName, const char* apiName, bool 
     windowImpl.Backend = FAST3D_DEKO3D;
     std::dynamic_pointer_cast<Fast3dGui>(Ship::Context::GetRawInstance()->GetWindow()->GetGui())->Init(windowImpl);
 
-    DekoTrace("Init: done");
+    Deko3dTrace("Init: done");
 }
 
-void GfxWindowBackendDeko::SwapBuffersBegin() {
+void GfxWindowBackendDeko3d::SwapBuffersBegin() {
     if (!mIsInitialized) {
         return;
     }
@@ -152,33 +244,33 @@ void GfxWindowBackendDeko::SwapBuffersBegin() {
 
     // Acquire a free swap chain slot, submit its pre-recorded clear, present.
     if (isTracing) {
-        DekoTrace("SwapBuffersBegin: acquireImage");
+        Deko3dTrace("SwapBuffersBegin: acquireImage");
     }
 
     mCurrentSlot = mQueue.acquireImage(mSwapChain);
 
     if (isTracing) {
-        DekoTrace("SwapBuffersBegin: submitCommands");
+        Deko3dTrace("SwapBuffersBegin: submitCommands");
     }
 
     mQueue.submitCommands(mClearCmdLists[mCurrentSlot]);
 
     if (isTracing) {
-        DekoTrace("SwapBuffersBegin: presentImage");
+        Deko3dTrace("SwapBuffersBegin: presentImage");
     }
 
     mQueue.presentImage(mSwapChain, mCurrentSlot);
 
     if (isTracing) {
-        DekoTrace("SwapBuffersBegin: first frame done");
+        Deko3dTrace("SwapBuffersBegin: first frame done");
     }
 }
 
-void GfxWindowBackendDeko::SwapBuffersEnd() {
+void GfxWindowBackendDeko3d::SwapBuffersEnd() {
     mCurrentSlot = -1;
 }
 
-void GfxWindowBackendDeko::Destroy() {
+void GfxWindowBackendDeko3d::Destroy() {
     if (!mIsInitialized) {
         return;
     }
@@ -186,20 +278,21 @@ void GfxWindowBackendDeko::Destroy() {
     DestroySwapChain();
     mCmdBuf = nullptr;
     mCmdMemBlock = nullptr;
+    mShaderCodeMemBlock = nullptr;
     mQueue = nullptr;
     mDevice = nullptr;
     mIsInitialized = false;
 }
 
-void GfxWindowBackendDeko::Close() {
+void GfxWindowBackendDeko3d::Close() {
     mIsRunning = false;
 }
 
-bool GfxWindowBackendDeko::IsRunning() {
+bool GfxWindowBackendDeko3d::IsRunning() {
     return mIsRunning && Ship::Switch::IsRunning();
 }
 
-void GfxWindowBackendDeko::HandleEvents() {
+void GfxWindowBackendDeko3d::HandleEvents() {
     // Pump SDL controller/joystick events; the LUS controller-mapping layer consumes them.
     SDL_PumpEvents();
     SDL_Event event;
@@ -214,8 +307,8 @@ void GfxWindowBackendDeko::HandleEvents() {
 // Window
 // --------------------------------------------------------------------------------------------------------------------
 
-void GfxWindowBackendDeko::GetDimensions(std::uint32_t* width, std::uint32_t* height, std::int32_t* posX,
-                                         std::int32_t* posY) {
+void GfxWindowBackendDeko3d::GetDimensions(std::uint32_t* width, std::uint32_t* height, std::int32_t* posX,
+                                           std::int32_t* posY) {
     if (width) {
         *width = mWidth;
     }
@@ -233,8 +326,8 @@ void GfxWindowBackendDeko::GetDimensions(std::uint32_t* width, std::uint32_t* he
     }
 }
 
-void GfxWindowBackendDeko::SetDimensions(std::uint32_t width, std::uint32_t height, std::int32_t posX,
-                                         std::int32_t posY) {
+void GfxWindowBackendDeko3d::SetDimensions(std::uint32_t width, std::uint32_t height, std::int32_t posX,
+                                           std::int32_t posY) {
     if ((width == mWidth && height == mHeight) || width == 0 || height == 0) {
         return;
     }
@@ -243,13 +336,13 @@ void GfxWindowBackendDeko::SetDimensions(std::uint32_t width, std::uint32_t heig
     CreateSwapChain(width, height);
 }
 
-void GfxWindowBackendDeko::GetActiveWindowRefreshRate(std::uint32_t* refreshRate) {
+void GfxWindowBackendDeko3d::GetActiveWindowRefreshRate(std::uint32_t* refreshRate) {
     if (refreshRate) {
         *refreshRate = 60;
     }
 }
 
-Ship::WindowRect GfxWindowBackendDeko::GetPrimaryMonitorRect() {
+Ship::WindowRect GfxWindowBackendDeko3d::GetPrimaryMonitorRect() {
     return { 0, 0, static_cast<std::int32_t>(mWidth), static_cast<std::int32_t>(mHeight) };
 }
 
@@ -257,26 +350,26 @@ Ship::WindowRect GfxWindowBackendDeko::GetPrimaryMonitorRect() {
 // Timing
 // --------------------------------------------------------------------------------------------------------------------
 
-double GfxWindowBackendDeko::GetTime() {
+double GfxWindowBackendDeko3d::GetTime() {
     return 0.0;
 }
 
-int GfxWindowBackendDeko::GetTargetFps() {
+int GfxWindowBackendDeko3d::GetTargetFps() {
     return mTargetFps;
 }
 
-void GfxWindowBackendDeko::SetTargetFps(int fps) {
+void GfxWindowBackendDeko3d::SetTargetFps(int fps) {
     mTargetFps = fps;
 }
 
-void GfxWindowBackendDeko::SetMaxFrameLatency(int latency) {
+void GfxWindowBackendDeko3d::SetMaxFrameLatency(int latency) {
 }
 
-bool GfxWindowBackendDeko::IsFrameReady() {
+bool GfxWindowBackendDeko3d::IsFrameReady() {
     return true;
 }
 
-bool GfxWindowBackendDeko::CanDisableVsync() {
+bool GfxWindowBackendDeko3d::CanDisableVsync() {
     return false; // deko3d present is vsynced via the swap chain.
 }
 
@@ -284,13 +377,13 @@ bool GfxWindowBackendDeko::CanDisableVsync() {
 // Fullscreen
 // --------------------------------------------------------------------------------------------------------------------
 
-void GfxWindowBackendDeko::SetFullscreenChangedCallback(void (*onFullscreenChanged)(bool)) {
+void GfxWindowBackendDeko3d::SetFullscreenChangedCallback(void (*onFullscreenChanged)(bool)) {
 }
 
-void GfxWindowBackendDeko::SetFullscreen(bool fullscreen) {
+void GfxWindowBackendDeko3d::SetFullscreen(bool fullscreen) {
 }
 
-bool GfxWindowBackendDeko::IsFullscreen() {
+bool GfxWindowBackendDeko3d::IsFullscreen() {
     return true;
 }
 
@@ -298,19 +391,19 @@ bool GfxWindowBackendDeko::IsFullscreen() {
 // deko3d
 // --------------------------------------------------------------------------------------------------------------------
 
-dk::Device GfxWindowBackendDeko::GetDevice() const {
+dk::Device GfxWindowBackendDeko3d::GetDevice() const {
     return mDevice;
 }
 
-dk::Queue GfxWindowBackendDeko::GetQueue() const {
+dk::Queue GfxWindowBackendDeko3d::GetQueue() const {
     return mQueue;
 }
 
-int GfxWindowBackendDeko::GetCurrentImageSlot() const {
+int GfxWindowBackendDeko3d::GetCurrentImageSlot() const {
     return mCurrentSlot;
 }
 
-const dk::Image& GfxWindowBackendDeko::GetFramebuffer(int slot) const {
+const dk::Image& GfxWindowBackendDeko3d::GetFramebuffer(int slot) const {
     return mFramebuffers[slot];
 }
 
@@ -318,11 +411,11 @@ const dk::Image& GfxWindowBackendDeko::GetFramebuffer(int slot) const {
 // Keyboard (no-op)
 // --------------------------------------------------------------------------------------------------------------------
 
-void GfxWindowBackendDeko::SetKeyboardCallbacks(bool (*onKeyDown)(int), bool (*onKeyUp)(int), void (*onAllKeysUp)()) {
+void GfxWindowBackendDeko3d::SetKeyboardCallbacks(bool (*onKeyDown)(int), bool (*onKeyUp)(int), void (*onAllKeysUp)()) {
     mOnAllKeysUp = onAllKeysUp;
 }
 
-const char* GfxWindowBackendDeko::GetKeyName(int scancode) {
+const char* GfxWindowBackendDeko3d::GetKeyName(int scancode) {
     return "";
 }
 
@@ -330,16 +423,16 @@ const char* GfxWindowBackendDeko::GetKeyName(int scancode) {
 // Mouse (no-op)
 // --------------------------------------------------------------------------------------------------------------------
 
-void GfxWindowBackendDeko::SetMouseCallbacks(bool (*onMouseButtonDown)(int), bool (*onMouseButtonUp)(int)) {
+void GfxWindowBackendDeko3d::SetMouseCallbacks(bool (*onMouseButtonDown)(int), bool (*onMouseButtonUp)(int)) {
 }
 
-void GfxWindowBackendDeko::SetCursorVisibility(bool visability) {
+void GfxWindowBackendDeko3d::SetCursorVisibility(bool visability) {
 }
 
-void GfxWindowBackendDeko::SetMousePos(std::int32_t posX, std::int32_t posY) {
+void GfxWindowBackendDeko3d::SetMousePos(std::int32_t posX, std::int32_t posY) {
 }
 
-void GfxWindowBackendDeko::GetMousePos(std::int32_t* x, std::int32_t* y) {
+void GfxWindowBackendDeko3d::GetMousePos(std::int32_t* x, std::int32_t* y) {
     if (x) {
         *x = 0;
     }
@@ -348,7 +441,7 @@ void GfxWindowBackendDeko::GetMousePos(std::int32_t* x, std::int32_t* y) {
     }
 }
 
-void GfxWindowBackendDeko::GetMouseDelta(std::int32_t* x, std::int32_t* y) {
+void GfxWindowBackendDeko3d::GetMouseDelta(std::int32_t* x, std::int32_t* y) {
     if (x) {
         *x = 0;
     }
@@ -358,7 +451,7 @@ void GfxWindowBackendDeko::GetMouseDelta(std::int32_t* x, std::int32_t* y) {
     }
 }
 
-void GfxWindowBackendDeko::GetMouseWheel(float* x, float* y) {
+void GfxWindowBackendDeko3d::GetMouseWheel(float* x, float* y) {
     if (x) {
         *x = 0.0f;
     }
@@ -368,14 +461,14 @@ void GfxWindowBackendDeko::GetMouseWheel(float* x, float* y) {
     }
 }
 
-bool GfxWindowBackendDeko::GetMouseState(std::uint32_t btn) {
+bool GfxWindowBackendDeko3d::GetMouseState(std::uint32_t btn) {
     return false;
 }
 
-void GfxWindowBackendDeko::SetMouseCapture(bool capture) {
+void GfxWindowBackendDeko3d::SetMouseCapture(bool capture) {
 }
 
-bool GfxWindowBackendDeko::IsMouseCaptured() {
+bool GfxWindowBackendDeko3d::IsMouseCaptured() {
     return false;
 }
 } // namespace Fast
