@@ -13,8 +13,9 @@
 namespace Fast {
 
 namespace {
-constexpr std::uint32_t gCmdMemSize = 0x10000;       // 64 KiB
+constexpr std::uint32_t gCmdMemSize = 0x10000;        // 64 KiB
 constexpr std::uint32_t gShaderCodeMemSize = 0x10000; // 64 KiB
+constexpr std::uint32_t gVtxMemSize = 0x1000;         // 4 KiB
 
 // .dksh on-disk layout: [control section (control_sz bytes, starts with this header)][code section (code_sz bytes)]
 struct DkshHeader {
@@ -25,6 +26,13 @@ struct DkshHeader {
     std::uint32_t ProgramsOff = 0;
     std::uint32_t NumPrograms = 0;
 };
+
+struct TracerVertex {
+    float Pos[4];
+    float Color[3];
+};
+
+static_assert(sizeof(TracerVertex) == 28, "vertex stride must match the shader's attribute layout");
 
 std::uint32_t AlignUp(std::uint32_t value, std::uint32_t alignment) {
     return value + alignment - 1 & ~(alignment - 1);
@@ -54,7 +62,7 @@ void Deko3dDebugCallback(void* userData, const char* context, DkResult result, c
 } // namespace
 
 GfxWindowBackendDeko3d::~GfxWindowBackendDeko3d() {
-    Destroy();
+    GfxWindowBackendDeko3d::Destroy();
 }
 
 void GfxWindowBackendDeko3d::CreateDeko3dDevice() {
@@ -73,6 +81,21 @@ void GfxWindowBackendDeko3d::CreateDeko3dDevice() {
                               .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached | DkMemBlockFlags_Code)
                               .create();
     mShaderCodeOffset = DK_SHADER_CODE_ALIGNMENT;
+
+    // Static vertex buffer (clip-space positions, per-vertex color as the single input)
+    mVtxMemBlock = dk::MemBlockMaker{ mDevice, AlignUp(gVtxMemSize, DK_MEMBLOCK_ALIGNMENT) }
+                       .setFlags(DkMemBlockFlags_CpuCached | DkMemBlockFlags_GpuCached)
+                       .create();
+
+    constexpr TracerVertex vertices[3] = {
+        { { 0.0f, 0.6f, 0.0f, 1.0f }, { 1.0f, 0.0f, 0.0f } },
+        { { -0.6f, -0.6f, 0.0f, 1.0f }, { 0.0f, 1.0f, 0.0f } },
+        { { 0.6f, -0.6f, 0.0f, 1.0f }, { 0.0f, 0.0f, 1.0f } },
+    };
+
+    std::memcpy(mVtxMemBlock.getCpuAddr(), vertices, sizeof(vertices));
+    mVtxGpuAddr = mVtxMemBlock.getGpuAddr();
+    mVtxSize = sizeof(vertices);
 }
 
 void GfxWindowBackendDeko3d::CreateSwapChain(std::uint32_t width, std::uint32_t height) {
@@ -119,16 +142,19 @@ void GfxWindowBackendDeko3d::RecordClearCommandLists() {
         mCmdBuf.setScissors(0, { { 0, 0, mWidth, mHeight } });
         mCmdBuf.clearColor(0, DkColorMask_RGBA, 1.0f, 0.0f, 1.0f, 1.0f);
 
-        // Bind the tracer shaders + minimal pipeline state and draw a gl_VertexID triangle.  The RT, viewport, and
-        // scissor are already bound above.  No depth attachment, so depth test is off; cull off so winding is
-        // irrelevant; no vertex attributes (positions come from gl_VertexID).  Removed once the rapi draws.
-        mCmdBuf.bindShaders(DkStageFlag_GraphicsMask, { &mTracerVsh, &mTracerFsh });
+        // Bind the vertex color shaders + minimal state, bind the vertex buffer with its attribute layout, and draw.
+        // The RT, viewport, scissor are already bound above.  Removed once the rapi draws.
+        mCmdBuf.bindShaders(DkStageFlag_GraphicsMask, { &mColorVsh, &mColorFsh });
         mCmdBuf.bindRasterizerState(dk::RasterizerState{}.setCullMode(DkFace_None));
         mCmdBuf.bindColorState(dk::ColorState{});
         mCmdBuf.bindColorWriteState(dk::ColorWriteState{});
         mCmdBuf.bindDepthStencilState(dk::DepthStencilState{}.setDepthTestEnable(false));
-        mCmdBuf.bindVtxAttribState({});
-        mCmdBuf.bindVtxBufferState({});
+        mCmdBuf.bindVtxAttribState({
+            { 0, 0, 0, DkVtxAttribSize_4x32, DkVtxAttribType_Float, 0 },  // aVtxPos @ 0
+            { 0, 0, 16, DkVtxAttribSize_3x32, DkVtxAttribType_Float, 0 }, // aInput1 @ 16
+        });
+        mCmdBuf.bindVtxBufferState({ { sizeof(TracerVertex), 0 } }); // stride 28, divisor 0
+        mCmdBuf.bindVtxBuffer(0, mVtxGpuAddr, mVtxSize);
         mCmdBuf.draw(DkPrimitive_Triangles, 3, 1, 0, 0);
 
         mClearCmdLists[i] = mCmdBuf.finishList();
@@ -210,12 +236,12 @@ void GfxWindowBackendDeko3d::Init(const char* gameName, const char* apiName, boo
         Deko3dTrace("Init: romfsInit failed (no embedded romfs?)");
     }
 
-    if (!LoadDeko3dShader(mTracerVsh, "romfs:/shaders/deko3d/tracer.vert.dksh")) {
-        Deko3dTrace("Init: tracer vsh load failed");
+    if (!LoadDeko3dShader(mColorVsh, "romfs:/shaders/deko3d/color.vert.dksh")) {
+        Deko3dTrace("Init: color vsh load failed");
     }
 
-    if (!LoadDeko3dShader(mTracerFsh, "romfs:/shaders/deko3d/tracer.frag.dksh")) {
-        Deko3dTrace("Init: tracer fsh load failed");
+    if (!LoadDeko3dShader(mColorFsh, "romfs:/shaders/deko3d/color.frag.dksh")) {
+        Deko3dTrace("Init: color fsh load failed");
     }
 
     Deko3dTrace("Init: creating swap chain");
@@ -279,6 +305,7 @@ void GfxWindowBackendDeko3d::Destroy() {
     mCmdBuf = nullptr;
     mCmdMemBlock = nullptr;
     mShaderCodeMemBlock = nullptr;
+    mVtxMemBlock = nullptr;
     mQueue = nullptr;
     mDevice = nullptr;
     mIsInitialized = false;

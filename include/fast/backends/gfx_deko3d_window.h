@@ -119,11 +119,14 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
     dk::UniqueCmdBuf mCmdBuf = {};
     std::array<DkCmdList, sFramebuffers> mClearCmdLists = {};
 
-    // shader code memory + the two tracer shaders, plus a running bump offset into the code memblock.
+    // shader code memory + the two vertex color shaders, plus a static vertex buffer feeding their attributes.
     dk::UniqueMemBlock mShaderCodeMemBlock = {};
-    dk::Shader mTracerVsh = {};
-    dk::Shader mTracerFsh = {};
+    dk::Shader mColorVsh = {};
+    dk::Shader mColorFsh = {};
     std::uint32_t mShaderCodeOffset = 0;
+    dk::UniqueMemBlock mVtxMemBlock = {};
+    DkGpuAddr mVtxGpuAddr = 0;
+    std::uint32_t mVtxSize = 0;
 
     std::uint32_t mWidth = 1280;
     std::uint32_t mHeight = 720;

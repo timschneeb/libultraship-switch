@@ -142,22 +142,22 @@ int GfxRenderingApiDeko3d::CreateFramebuffer() {
 }
 
 void GfxRenderingApiDeko3d::UpdateFramebufferParameters(int fbId, std::uint32_t width, std::uint32_t height,
-                                                      std::uint32_t msaaLevel, bool openglInvertY, bool renderTarget,
-                                                      bool hasDepthBuffer, bool canExtractDepth) {
+                                                        std::uint32_t msaaLevel, bool openglInvertY, bool renderTarget,
+                                                        bool hasDepthBuffer, bool canExtractDepth) {
 }
 
 void GfxRenderingApiDeko3d::StartDrawToFramebuffer(int fbId, float noiseScale) {
 }
 
 void GfxRenderingApiDeko3d::CopyFramebuffer(int fbDstId, int fbSrcId, int srcX0, int srcY0, int srcX1, int srcY1,
-                                          int dstX0, int dstY0, int dstX1, int dstY1) {
+                                            int dstX0, int dstY0, int dstX1, int dstY1) {
 }
 
 void GfxRenderingApiDeko3d::ClearFramebuffer(bool color, bool depth) {
 }
 
 void GfxRenderingApiDeko3d::ReadFramebufferToCPU(int fbId, std::uint32_t width, std::uint32_t height,
-                                               std::uint16_t* rgba16Buf) {
+                                                 std::uint16_t* rgba16Buf) {
 }
 
 void GfxRenderingApiDeko3d::ResolveMSAAColorBuffer(int fbIdTarget, int fbIdSrc) {
