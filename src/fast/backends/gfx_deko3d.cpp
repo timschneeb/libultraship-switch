@@ -125,9 +125,25 @@ void GfxRenderingApiDeko3d::OnResize() {
 }
 
 void GfxRenderingApiDeko3d::StartFrame() {
+    mFrameCmdBuf = mWindowBackend->BeginFrameRecording();
+
+    dk::CmdBuf cb = mFrameCmdBuf;
+    cb.bindShaders(DkStageFlag_GraphicsMask, { &mWindowBackend->GetColorVsh(), &mWindowBackend->GetColorFsh() });
+    cb.bindRasterizerState(dk::RasterizerState{}.setCullMode(DkFace_None));
+    cb.bindColorState(dk::ColorState{});
+    cb.bindColorWriteState(dk::ColorWriteState{});
+    cb.bindDepthStencilState(dk::DepthStencilState{}.setDepthTestEnable(false));
+    cb.bindVtxAttribState({
+        { 0, 0, 0, DkVtxAttribSize_4x32, DkVtxAttribType_Float, 0 },
+        { 0, 0, 16, DkVtxAttribSize_3x32, DkVtxAttribType_Float, 0 },
+    });
+    cb.bindVtxBufferState({ { 28, 0 } });
+    cb.bindVtxBuffer(0, mWindowBackend->GetVtxGpuAddr(), mWindowBackend->GetVtxSize());
+    cb.draw(DkPrimitive_Triangles, 3, 1, 0, 0);
 }
 
 void GfxRenderingApiDeko3d::EndFrame() {
+    mWindowBackend->EndFrameRecording(mFrameCmdBuf.finishList());
 }
 
 void GfxRenderingApiDeko3d::FinishRender() {

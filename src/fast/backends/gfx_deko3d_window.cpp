@@ -156,28 +156,6 @@ void GfxWindowBackendDeko3d::RecordClearCommandLists() {
     }
 }
 
-DkCmdList GfxWindowBackendDeko3d::RecordFrameDrawList(std::uint32_t ringIndex) {
-    dk::CmdBuf cb = mFrameCmdBuf[ringIndex];
-    cb.clear();
-
-    // RT/viewport/scissor are bound by the clear list submitted just before this one.  Queue state persists across
-    // submits, so we only record pipeline + vertex state + the draw here.
-    cb.bindShaders(DkStageFlag_GraphicsMask, { &mColorVsh, &mColorFsh });
-    cb.bindRasterizerState(dk::RasterizerState{}.setCullMode(DkFace_None));
-    cb.bindColorState(dk::ColorState{});
-    cb.bindColorWriteState(dk::ColorWriteState{});
-    cb.bindDepthStencilState(dk::DepthStencilState{}.setDepthTestEnable(false));
-    cb.bindVtxAttribState({
-        { 0, 0, 0, DkVtxAttribSize_4x32, DkVtxAttribType_Float, 0 },
-        { 0, 0, 16, DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
-    });
-    cb.bindVtxBufferState({ { sizeof(TracerVertex), 0 } });
-    cb.bindVtxBuffer(0, mVtxGpuAddr, mVtxSize);
-    cb.draw(DkPrimitive_Triangles, 3, 1, 0, 0);
-
-    return cb.finishList();
-}
-
 bool GfxWindowBackendDeko3d::LoadDeko3dShader(dk::Shader& shader, const char* path) {
     const auto file = std::fopen(path, "rb");
     if (!file) {
@@ -283,21 +261,19 @@ void GfxWindowBackendDeko3d::SwapBuffersBegin() {
 
     mCurrentSlot = mQueue.acquireImage(mSwapChain);
 
-    const std::uint32_t ring = mFrameIndex % sFramebuffers;
-    // Gate reuse of the ring slot's command memory on the GPU having finishes its previous use.
-    if (mIsFrameFenceValid[ring]) {
-        mFrameFence[ring].wait();
+    mQueue.submitCommands(mClearCmdLists[mCurrentSlot]); // RT + viewport + scissor + clear
+
+    if (mHasFrameDrawList) {
+        mQueue.submitCommands(mFrameDrawList); // rapi's draws, inheriting the bound state
     }
 
-    const auto drawList = RecordFrameDrawList(ring);
-
-    mQueue.submitCommands(mClearCmdLists[mCurrentSlot]); // Binds RT[slot] + viewport + scissor + clear
-    mQueue.submitCommands(drawList);                     // Draws inherit that bound state
-    mQueue.signalFence(mFrameFence[ring]);               // Signals after the draws complete
-    mIsFrameFenceValid[ring] = true;
+    mQueue.signalFence(mFrameFence[mRecordingRing]); // Signals after the draws complete
+    mIsFrameFenceValid[mRecordingRing] = true;
 
     mQueue.presentImage(mSwapChain, mCurrentSlot);
+
     ++mFrameIndex;
+    mHasFrameDrawList = false;
 }
 
 void GfxWindowBackendDeko3d::SwapBuffersEnd() {
@@ -435,6 +411,37 @@ bool GfxWindowBackendDeko3d::IsFullscreen() {
 // --------------------------------------------------------------------------------------------------------------------
 // deko3d
 // --------------------------------------------------------------------------------------------------------------------
+
+dk::CmdBuf GfxWindowBackendDeko3d::BeginFrameRecording() {
+    mRecordingRing = mFrameIndex % sFramebuffers;
+    if (mIsFrameFenceValid[mRecordingRing]) {
+        mFrameFence[mRecordingRing].wait(); // Gate reuse of this ring slot's command memory
+    }
+
+    mFrameCmdBuf[mRecordingRing].clear();
+    return mFrameCmdBuf[mRecordingRing];
+}
+
+void GfxWindowBackendDeko3d::EndFrameRecording(DkCmdList drawList) {
+    mFrameDrawList = drawList;
+    mHasFrameDrawList = true;
+}
+
+const dk::Shader& GfxWindowBackendDeko3d::GetColorVsh() const {
+    return mColorVsh;
+}
+
+const dk::Shader& GfxWindowBackendDeko3d::GetColorFsh() const {
+    return mColorFsh;
+}
+
+DkGpuAddr GfxWindowBackendDeko3d::GetVtxGpuAddr() const {
+    return mVtxGpuAddr;
+}
+
+std::uint32_t GfxWindowBackendDeko3d::GetVtxSize() const {
+    return mVtxSize;
+}
 
 dk::Device GfxWindowBackendDeko3d::GetDevice() const {
     return mDevice;

@@ -93,6 +93,8 @@ class GfxRenderingApiDeko3d final : public GfxRenderingAPI {
   private:
     GfxWindowBackendDeko3d* mWindowBackend = nullptr;
     FilteringMode mTextureFilter = FILTER_THREE_POINT;
+
+    dk::CmdBuf mFrameCmdBuf = {};
 };
 } // namespace Fast
 #endif

@@ -64,6 +64,17 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
     // deko3d
     // ----------------------------------------------------------------------------------------------------------------
 
+    // The rapi borrows the current frame's cmdbuf, records draws, and returns the finished list; the window backend
+    // submits it after the clear in SwapBuffersBegin.
+    dk::CmdBuf BeginFrameRecording();
+    void EndFrameRecording(DkCmdList drawList);
+
+    // Resources the rapi binds while recording (window backend owns GPU memory; rapi borrows).
+    const dk::Shader& GetColorVsh() const;
+    const dk::Shader& GetColorFsh() const;
+    DkGpuAddr GetVtxGpuAddr() const;
+    std::uint32_t GetVtxSize() const;
+
     dk::Device GetDevice() const;
     dk::Queue GetQueue() const;
 
@@ -101,7 +112,6 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
     void CreateSwapChain(std::uint32_t width, std::uint32_t height);
     void DestroySwapChain();
     void RecordClearCommandLists();
-    DkCmdList RecordFrameDrawList(std::uint32_t ringIndex);
     // Load a single-stage .dksh from romfs into the shared shader code memblock.  Removed with the rest of the
     // scaffolding once GfxRenderingApiDeko3d records real draws.
     bool LoadDeko3dShader(dk::Shader& shader, const char* path);
@@ -136,6 +146,9 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
     std::array<dk::Fence, sFramebuffers> mFrameFence = {};
     std::array<bool, sFramebuffers> mIsFrameFenceValid = {};
     std::uint32_t mFrameIndex = 0;
+    DkCmdList mFrameDrawList = {};
+    bool mHasFrameDrawList = false;
+    std::uint32_t mRecordingRing = 0;
 
     std::uint32_t mWidth = 1280;
     std::uint32_t mHeight = 720;
