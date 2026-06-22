@@ -16,6 +16,7 @@ namespace {
 constexpr std::uint32_t gCmdMemSize = 0x10000;        // 64 KiB
 constexpr std::uint32_t gShaderCodeMemSize = 0x10000; // 64 KiB
 constexpr std::uint32_t gVtxMemSize = 0x1000;         // 4 KiB
+constexpr std::uint32_t gFrameCmdMemSize = 0x10000;   // 64 KiB per ring slot
 
 // .dksh on-disk layout: [control section (control_sz bytes, starts with this header)][code section (code_sz bytes)]
 struct DkshHeader {
@@ -96,6 +97,15 @@ void GfxWindowBackendDeko3d::CreateDeko3dDevice() {
     std::memcpy(mVtxMemBlock.getCpuAddr(), vertices, sizeof(vertices));
     mVtxGpuAddr = mVtxMemBlock.getGpuAddr();
     mVtxSize = sizeof(vertices);
+
+    // Per-frame command memory + cmdbufs (one per swap chain image).
+    for (std::uint8_t i = 0; i < sFramebuffers; ++i) {
+        mFrameCmdMemBlock[i] = dk::MemBlockMaker{ mDevice, AlignUp(gFrameCmdMemSize, DK_MEMBLOCK_ALIGNMENT) }
+                                   .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
+                                   .create();
+        mFrameCmdBuf[i] = dk::CmdBufMaker{ mDevice }.create();
+        mFrameCmdBuf[i].addMemory(mFrameCmdMemBlock[i], 0, gFrameCmdMemSize);
+    }
 }
 
 void GfxWindowBackendDeko3d::CreateSwapChain(std::uint32_t width, std::uint32_t height) {
@@ -142,23 +152,30 @@ void GfxWindowBackendDeko3d::RecordClearCommandLists() {
         mCmdBuf.setScissors(0, { { 0, 0, mWidth, mHeight } });
         mCmdBuf.clearColor(0, DkColorMask_RGBA, 1.0f, 0.0f, 1.0f, 1.0f);
 
-        // Bind the vertex color shaders + minimal state, bind the vertex buffer with its attribute layout, and draw.
-        // The RT, viewport, scissor are already bound above.  Removed once the rapi draws.
-        mCmdBuf.bindShaders(DkStageFlag_GraphicsMask, { &mColorVsh, &mColorFsh });
-        mCmdBuf.bindRasterizerState(dk::RasterizerState{}.setCullMode(DkFace_None));
-        mCmdBuf.bindColorState(dk::ColorState{});
-        mCmdBuf.bindColorWriteState(dk::ColorWriteState{});
-        mCmdBuf.bindDepthStencilState(dk::DepthStencilState{}.setDepthTestEnable(false));
-        mCmdBuf.bindVtxAttribState({
-            { 0, 0, 0, DkVtxAttribSize_4x32, DkVtxAttribType_Float, 0 },  // aVtxPos @ 0
-            { 0, 0, 16, DkVtxAttribSize_3x32, DkVtxAttribType_Float, 0 }, // aInput1 @ 16
-        });
-        mCmdBuf.bindVtxBufferState({ { sizeof(TracerVertex), 0 } }); // stride 28, divisor 0
-        mCmdBuf.bindVtxBuffer(0, mVtxGpuAddr, mVtxSize);
-        mCmdBuf.draw(DkPrimitive_Triangles, 3, 1, 0, 0);
-
         mClearCmdLists[i] = mCmdBuf.finishList();
     }
+}
+
+DkCmdList GfxWindowBackendDeko3d::RecordFrameDrawList(std::uint32_t ringIndex) {
+    dk::CmdBuf cb = mFrameCmdBuf[ringIndex];
+    cb.clear();
+
+    // RT/viewport/scissor are bound by the clear list submitted just before this one.  Queue state persists across
+    // submits, so we only record pipeline + vertex state + the draw here.
+    cb.bindShaders(DkStageFlag_GraphicsMask, { &mColorVsh, &mColorFsh });
+    cb.bindRasterizerState(dk::RasterizerState{}.setCullMode(DkFace_None));
+    cb.bindColorState(dk::ColorState{});
+    cb.bindColorWriteState(dk::ColorWriteState{});
+    cb.bindDepthStencilState(dk::DepthStencilState{}.setDepthTestEnable(false));
+    cb.bindVtxAttribState({
+        { 0, 0, 0, DkVtxAttribSize_4x32, DkVtxAttribType_Float, 0 },
+        { 0, 0, 16, DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
+    });
+    cb.bindVtxBufferState({ { sizeof(TracerVertex), 0 } });
+    cb.bindVtxBuffer(0, mVtxGpuAddr, mVtxSize);
+    cb.draw(DkPrimitive_Triangles, 3, 1, 0, 0);
+
+    return cb.finishList();
 }
 
 bool GfxWindowBackendDeko3d::LoadDeko3dShader(dk::Shader& shader, const char* path) {
@@ -264,32 +281,23 @@ void GfxWindowBackendDeko3d::SwapBuffersBegin() {
         return;
     }
 
-    static bool sIsFirst = true;
-    const bool isTracing = sIsFirst;
-    sIsFirst = false;
-
-    // Acquire a free swap chain slot, submit its pre-recorded clear, present.
-    if (isTracing) {
-        Deko3dTrace("SwapBuffersBegin: acquireImage");
-    }
-
     mCurrentSlot = mQueue.acquireImage(mSwapChain);
 
-    if (isTracing) {
-        Deko3dTrace("SwapBuffersBegin: submitCommands");
+    const std::uint32_t ring = mFrameIndex % sFramebuffers;
+    // Gate reuse of the ring slot's command memory on the GPU having finishes its previous use.
+    if (mIsFrameFenceValid[ring]) {
+        mFrameFence[ring].wait();
     }
 
-    mQueue.submitCommands(mClearCmdLists[mCurrentSlot]);
+    const auto drawList = RecordFrameDrawList(ring);
 
-    if (isTracing) {
-        Deko3dTrace("SwapBuffersBegin: presentImage");
-    }
+    mQueue.submitCommands(mClearCmdLists[mCurrentSlot]); // Binds RT[slot] + viewport + scissor + clear
+    mQueue.submitCommands(drawList);                     // Draws inherit that bound state
+    mQueue.signalFence(mFrameFence[ring]);               // Signals after the draws complete
+    mIsFrameFenceValid[ring] = true;
 
     mQueue.presentImage(mSwapChain, mCurrentSlot);
-
-    if (isTracing) {
-        Deko3dTrace("SwapBuffersBegin: first frame done");
-    }
+    ++mFrameIndex;
 }
 
 void GfxWindowBackendDeko3d::SwapBuffersEnd() {
@@ -301,7 +309,17 @@ void GfxWindowBackendDeko3d::Destroy() {
         return;
     }
 
+    if (mQueue) {
+        mQueue.waitIdle(); // Ensure no ring memory is in flight before teardown
+    }
+
     DestroySwapChain();
+
+    for (std::uint8_t i = 0; i < sFramebuffers; ++i) {
+        mFrameCmdBuf[i] = nullptr;
+        mFrameCmdMemBlock[i] = nullptr;
+    }
+
     mCmdBuf = nullptr;
     mCmdMemBlock = nullptr;
     mShaderCodeMemBlock = nullptr;

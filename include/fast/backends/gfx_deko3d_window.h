@@ -101,6 +101,7 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
     void CreateSwapChain(std::uint32_t width, std::uint32_t height);
     void DestroySwapChain();
     void RecordClearCommandLists();
+    DkCmdList RecordFrameDrawList(std::uint32_t ringIndex);
     // Load a single-stage .dksh from romfs into the shared shader code memblock.  Removed with the rest of the
     // scaffolding once GfxRenderingApiDeko3d records real draws.
     bool LoadDeko3dShader(dk::Shader& shader, const char* path);
@@ -119,7 +120,7 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
     dk::UniqueCmdBuf mCmdBuf = {};
     std::array<DkCmdList, sFramebuffers> mClearCmdLists = {};
 
-    // shader code memory + the two vertex color shaders, plus a static vertex buffer feeding their attributes.
+    // Shader code memory + the two vertex color shaders, plus a static vertex buffer feeding their attributes.
     dk::UniqueMemBlock mShaderCodeMemBlock = {};
     dk::Shader mColorVsh = {};
     dk::Shader mColorFsh = {};
@@ -127,6 +128,14 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
     dk::UniqueMemBlock mVtxMemBlock = {};
     DkGpuAddr mVtxGpuAddr = 0;
     std::uint32_t mVtxSize = 0;
+
+    // Command region + cmdbuf + fence per swap chain image, cycled each frame; the fence gates reuse so we never
+    // rerecord memory the GPU is still executing.
+    std::array<dk::UniqueMemBlock, sFramebuffers> mFrameCmdMemBlock = {};
+    std::array<dk::UniqueCmdBuf, sFramebuffers> mFrameCmdBuf = {};
+    std::array<dk::Fence, sFramebuffers> mFrameFence = {};
+    std::array<bool, sFramebuffers> mIsFrameFenceValid = {};
+    std::uint32_t mFrameIndex = 0;
 
     std::uint32_t mWidth = 1280;
     std::uint32_t mHeight = 720;
