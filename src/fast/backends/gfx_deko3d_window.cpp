@@ -126,6 +126,28 @@ void GfxWindowBackendDeko3d::CreateSwapChain(std::uint32_t width, std::uint32_t 
         swapChainImages[i] = &mFramebuffers[i];
     }
 
+    // Depth buffer per swap chain image.  Rendering is double-buffered (sFrameBuffers in flight), so each frame needs
+    // its own depth target; the frame fence already gates reuse of slot i.
+    dk::ImageLayout depthLayout = {};
+    dk::ImageLayoutMaker{ mDevice }
+        .setFlags(DkImageFlags_UsageRender | DkImageFlags_HwCompression)
+        .setFormat(DkImageFormat_Z24S8)
+        .setDimensions(width, height)
+        .initialize(depthLayout);
+
+    const auto depthSize = depthLayout.getSize();
+    const auto depthAlign = depthLayout.getAlignment();
+    const auto depthStride = AlignUp(static_cast<std::uint32_t>(depthSize), depthAlign);
+    const auto depthPoolSize = AlignUp(depthStride * sFramebuffers, DK_MEMBLOCK_ALIGNMENT);
+
+    mDepthMemBlock = dk::MemBlockMaker{ mDevice, depthPoolSize }
+                         .setFlags(DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image)
+                         .create();
+
+    for (std::uint8_t i = 0; i < sFramebuffers; ++i) {
+        mDepthBuffers[i].initialize(depthLayout, mDepthMemBlock, depthStride * i);
+    }
+
     mSwapChain = dk::SwapchainMaker{ mDevice, nwindowGetDefault(), swapChainImages }.create();
 
     RecordClearCommandLists();
@@ -137,12 +159,15 @@ void GfxWindowBackendDeko3d::RecordClearCommandLists() {
     mCmdBuf.clear();
 
     for (std::uint8_t i = 0; i < sFramebuffers; ++i) {
-        dk::ImageView view{ mFramebuffers[i] };
-        mCmdBuf.bindRenderTargets({ &view }, nullptr);
+        dk::ImageView colorView{ mFramebuffers[i] };
+        dk::ImageView depthView{ mDepthBuffers[i] };
+
+        mCmdBuf.bindRenderTargets({ &colorView }, &depthView);
         mCmdBuf.setViewports(0,
                              { { 0.0f, 0.0f, static_cast<float>(mWidth), static_cast<float>(mHeight), 0.0f, 1.0f } });
         mCmdBuf.setScissors(0, { { 0, 0, mWidth, mHeight } });
         mCmdBuf.clearColor(0, DkColorMask_RGBA, 1.0f, 0.0f, 1.0f, 1.0f);
+        mCmdBuf.clearDepthStencil(true, 1.0f, 0xFF, 0); // far = 1.0 in 0..1 depth
 
         mClearCmdLists[i] = mCmdBuf.finishList();
     }
@@ -199,6 +224,7 @@ void GfxWindowBackendDeko3d::DestroySwapChain() {
 
     mSwapChain = nullptr;
     mFbMemBlock = nullptr;
+    mDepthMemBlock = nullptr;
     mClearCmdLists = {};
 }
 

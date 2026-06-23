@@ -97,9 +97,12 @@ ImTextureID GfxRenderingApiDeko3d::GetTextureById(int id) {
 // --------------------------------------------------------------------------------------------------------------------
 
 void GfxRenderingApiDeko3d::SetDepthTestAndMask(bool depthTest, bool zUpd) {
+    mDepthTest = depthTest;
+    mDepthMask = zUpd;
 }
 
 void GfxRenderingApiDeko3d::SetZmodeDecal(bool decal) {
+    mDecal = decal;
 }
 
 void GfxRenderingApiDeko3d::SetViewport(int x, int y, int width, int height) {
@@ -109,7 +112,7 @@ void GfxRenderingApiDeko3d::SetScissor(int x, int y, int width, int height) {
 }
 
 void GfxRenderingApiDeko3d::SetUseAlpha(bool useAlpha) {
-    mIsUsingAlpha = useAlpha;
+    mUseAlpha = useAlpha;
 }
 
 void GfxRenderingApiDeko3d::SetSrgbMode() {
@@ -143,10 +146,18 @@ void GfxRenderingApiDeko3d::DrawTriangles(float bufVbo[], std::size_t bufVboLen,
     mVtxRingOffset[mRing] = offset + dataBytes;
 
     // Inputs are packed last; the single forced input is the final (3 + alpha) floats.  Read its RGB.
-    const std::uint32_t inputFloats = 3u + mIsUsingAlpha ? 1u : 0u;
+    const std::uint32_t inputFloats = 3u + (mUseAlpha ? 1u : 0u);
     const std::uint32_t inputOffsetBytes = (strideFloats - inputFloats) * static_cast<std::uint32_t>(sizeof(float));
 
     auto cb = mFrameCmdBuf;
+
+    const bool isDepthEnabled = mDepthTest || mDepthMask;
+    cb.bindDepthStencilState(
+        dk::DepthStencilState{}
+            .setDepthTestEnable(isDepthEnabled)
+            .setDepthWriteEnable(mDepthMask)
+            .setDepthCompareOp(mDepthTest ? (mDecal ? DkCompareOp_Lequal : DkCompareOp_Less) : DkCompareOp_Always));
+
     cb.bindVtxAttribState({
         { 0, 0, 0, DkVtxAttribSize_4x32, DkVtxAttribType_Float, 0 },                // aVtxPos @ 0
         { 0, 0, inputOffsetBytes, DkVtxAttribSize_3x32, DkVtxAttribType_Float, 0 }, // aInput1 @ adaptive
@@ -189,7 +200,6 @@ void GfxRenderingApiDeko3d::StartFrame() {
     cb.bindRasterizerState(dk::RasterizerState{}.setCullMode(DkFace_None));
     cb.bindColorState(dk::ColorState{});
     cb.bindColorWriteState(dk::ColorWriteState{});
-    cb.bindDepthStencilState(dk::DepthStencilState{}.setDepthTestEnable(false)); // No depth attachment yet
 }
 
 void GfxRenderingApiDeko3d::EndFrame() {

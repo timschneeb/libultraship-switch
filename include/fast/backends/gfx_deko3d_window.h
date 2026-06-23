@@ -130,6 +130,10 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
     // Framebuffer images live in a single GPU-cached image memblock.
     dk::UniqueMemBlock mFbMemBlock = {};
     std::array<dk::Image, sFramebuffers> mFramebuffers = {};
+
+    dk::UniqueMemBlock mDepthMemBlock = {};
+    std::array<dk::Image, sFramebuffers> mDepthBuffers = {}; // One per in-flight frame, gated by the frame fence
+
     std::int32_t mCurrentSlot = -1;
 
     // Command memory + a cmdbuf holding the pre-recorded per-slot clear lists.

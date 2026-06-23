@@ -98,7 +98,11 @@ class GfxRenderingApiDeko3d final : public GfxRenderingAPI {
     ShaderProgramDeko3d mProgram = {}; // One color handle returned for every shader ID
     dk::CmdBuf mFrameCmdBuf = {};      // Borrowed frame cmdbuf (set in StartFrame)
     std::uint32_t mRing = 0;           // Current ring slot
-    bool mIsUsingAlpha = false;        // From SetUseAlpha: selects the vec3/vec4 input stride
+
+    bool mUseAlpha = false; // From SetUseAlpha: selects the vec3/vec4 input stride
+    bool mDepthTest = false;
+    bool mDepthMask = false;
+    bool mDecal = false;
 
     std::array<dk::UniqueMemBlock, sVtxRing> mVtxRingMemBlock = {};
     std::array<DkGpuAddr, sVtxRing> mVtxRingGpu = {};
