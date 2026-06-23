@@ -13,11 +13,10 @@
 namespace Fast {
 
 namespace {
-constexpr std::uint32_t gCmdMemSize = 0x10'000;        // 64 KiB
-constexpr std::uint32_t gShaderCodeMemSize = 0x10'000; // 64 KiB
-
-// TODO: Memory callback so the cmdbuf grows instead of aborting.
-constexpr std::uint32_t gFrameCmdMemSize = 0x200'000; // 2 MiB per slot
+constexpr std::uint32_t gCmdMemSize = 0x10000;          // 64 KiB
+constexpr std::uint32_t gShaderCodeMemSize = 0x10000;   // 64 KiB
+constexpr std::uint32_t gFrameCmdInitialSize = 0x10000; // Initial 64 KiB per slot
+constexpr std::uint32_t gFrameCmdChunk = 0x40000;       // 256 KiB growth granularity
 
 // .dksh on-disk layout: [control section (control_sz bytes, starts with this header)][code section (code_sz bytes)]
 struct DkshHeader {
@@ -61,6 +60,19 @@ void Deko3dDebugCallback(void* userData, const char* context, DkResult result, c
                   context ? context : "(null)", message ? message : "(null)");
     Deko3dTrace(buffer);
 }
+
+// deko3d calls this when a frame cmdbuf runs out of recording space.  Grow it; the block stays alive in the slot's
+// vector and is reused after clear() until teardown.
+void Deko3dFrameCmdAddMem(void* userData, DkCmdBuf cmdbuf, std::size_t minReqSize) {
+    const auto memory = static_cast<Deko3dFrameCmdMem*>(userData);
+    const auto size = AlignUp(std::max(static_cast<std::uint32_t>(minReqSize), gFrameCmdChunk), DK_MEMBLOCK_ALIGNMENT);
+
+    auto block = dk::MemBlockMaker{ memory->Device, size }
+                     .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
+                     .create();
+    dk::CmdBuf{ cmdbuf }.addMemory(block, 0, size);
+    memory->Blocks.push_back(std::move(block));
+}
 } // namespace
 
 GfxWindowBackendDeko3d::~GfxWindowBackendDeko3d() {
@@ -84,19 +96,16 @@ void GfxWindowBackendDeko3d::CreateDeko3dDevice() {
                               .create();
     mShaderCodeOffset = DK_SHADER_CODE_ALIGNMENT;
 
-    constexpr TracerVertex vertices[3] = {
-        { { 0.0f, 0.6f, 0.0f, 1.0f }, { 1.0f, 0.0f, 0.0f } },
-        { { -0.6f, -0.6f, 0.0f, 1.0f }, { 0.0f, 1.0f, 0.0f } },
-        { { 0.6f, -0.6f, 0.0f, 1.0f }, { 0.0f, 0.0f, 1.0f } },
-    };
-
-    // Per-frame command memory + cmdbufs (one per swap chain image).
     for (std::uint8_t i = 0; i < sFramebuffers; ++i) {
-        mFrameCmdMemBlock[i] = dk::MemBlockMaker{ mDevice, AlignUp(gFrameCmdMemSize, DK_MEMBLOCK_ALIGNMENT) }
-                                   .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
-                                   .create();
-        mFrameCmdBuf[i] = dk::CmdBufMaker{ mDevice }.create();
-        mFrameCmdBuf[i].addMemory(mFrameCmdMemBlock[i], 0, gFrameCmdMemSize);
+        mFrameCmdMem[i].Device = mDevice;
+        mFrameCmdBuf[i] =
+            dk::CmdBufMaker{ mDevice }.setUserData(&mFrameCmdMem[i]).setCbAddMem(&Deko3dFrameCmdAddMem).create();
+
+        auto initial = dk::MemBlockMaker{ mDevice, AlignUp(gFrameCmdInitialSize, DK_MEMBLOCK_ALIGNMENT) }
+                           .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
+                           .create();
+        mFrameCmdBuf[i].addMemory(initial, 0, gFrameCmdInitialSize);
+        mFrameCmdMem[i].Blocks.push_back(std::move(initial));
     }
 }
 
@@ -311,7 +320,7 @@ void GfxWindowBackendDeko3d::Destroy() {
 
     for (std::uint8_t i = 0; i < sFramebuffers; ++i) {
         mFrameCmdBuf[i] = nullptr;
-        mFrameCmdMemBlock[i] = nullptr;
+        mFrameCmdMem[i].Blocks.clear();
     }
 
     mCmdBuf = nullptr;
