@@ -43,10 +43,10 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
     // Timing
     // ----------------------------------------------------------------------------------------------------------------
 
-    double GetTime() override;
-    int GetTargetFps() override;
     void SetTargetFps(int fps) override;
     void SetMaxFrameLatency(int latency) override;
+    double GetTime() override;
+    int GetTargetFps() override;
     bool IsFrameReady() override;
     bool CanDisableVsync() override;
 
@@ -133,6 +133,8 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
     // scaffolding once GfxRenderingApiDeko3d records real draws.
     bool LoadDeko3dShader(dk::Shader& shader, const char* path);
 
+    void SyncFrameRateWithTime(); // Software frame limiter
+
     // deko3d core objects (owned).
     dk::UniqueDevice mDevice = {};
     dk::UniqueQueue mQueue = {};
@@ -171,9 +173,11 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
 
     std::uint32_t mWidth = 1280;
     std::uint32_t mHeight = 720;
-    std::int32_t mTargetFps = 60;
     bool mIsRunning = true;
     bool mIsInitialized = false;
+
+    std::int32_t mTargetFps = 60;
+    std::int64_t mPreviousTimeNs = 0;
 
     void (*mOnAllKeysUp)() = nullptr;
 };

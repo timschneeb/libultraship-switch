@@ -225,6 +225,33 @@ bool GfxWindowBackendDeko3d::LoadDeko3dShader(dk::Shader& shader, const char* pa
     mShaderCodeOffset += AlignUp(dksh.CodeSz, DK_SHADER_CODE_ALIGNMENT);
     return true;
 }
+void GfxWindowBackendDeko3d::SyncFrameRateWithTime() {
+    const std::int32_t fps = mTargetFps > 0 ? mTargetFps : 60;
+    const std::int64_t frameNs = 1000000000LL / fps;
+
+    const auto now =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    const auto next = mPreviousTimeNs + frameNs;
+    const auto left = next - now;
+
+    if (left > 0) {
+        const timespec spec = { static_cast<std::time_t>(left / 1000000000LL), static_cast<long>(left % 1000000000LL) };
+        nanosleep(&spec, nullptr);
+    }
+
+    auto after =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+
+    // If we slept and woke within ~1ms of the deadline, snap to it so wake up latency doesn't drag the rate below
+    // target over time.
+    if (left > 0 && after - next < 1000000LL) {
+        after = next;
+    }
+
+    mPreviousTimeNs = after;
+}
 
 void GfxWindowBackendDeko3d::DestroySwapChain() {
     if (mQueue) {
@@ -296,6 +323,8 @@ void GfxWindowBackendDeko3d::SwapBuffersBegin() {
 
     mQueue.signalFence(mFrameFence[mRecordingRing]); // Signals after the draws complete
     mIsFrameFenceValid[mRecordingRing] = true;
+
+    SyncFrameRateWithTime();
 
     mQueue.presentImage(mSwapChain, mCurrentSlot);
 
@@ -397,19 +426,19 @@ Ship::WindowRect GfxWindowBackendDeko3d::GetPrimaryMonitorRect() {
 // Timing
 // --------------------------------------------------------------------------------------------------------------------
 
+void GfxWindowBackendDeko3d::SetTargetFps(int fps) {
+    mTargetFps = fps;
+}
+
+void GfxWindowBackendDeko3d::SetMaxFrameLatency(int latency) {
+}
+
 double GfxWindowBackendDeko3d::GetTime() {
     return 0.0;
 }
 
 int GfxWindowBackendDeko3d::GetTargetFps() {
     return mTargetFps;
-}
-
-void GfxWindowBackendDeko3d::SetTargetFps(int fps) {
-    mTargetFps = fps;
-}
-
-void GfxWindowBackendDeko3d::SetMaxFrameLatency(int latency) {
 }
 
 bool GfxWindowBackendDeko3d::IsFrameReady() {
