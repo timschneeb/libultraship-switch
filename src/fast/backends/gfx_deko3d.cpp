@@ -106,9 +106,32 @@ void GfxRenderingApiDeko3d::SetZmodeDecal(bool decal) {
 }
 
 void GfxRenderingApiDeko3d::SetViewport(int x, int y, int width, int height) {
+    std::uint32_t fbHeight = 0;
+    mWindowBackend->GetDimensions(nullptr, &fbHeight, nullptr, nullptr);
+
+    auto cb = mFrameCmdBuf;
+    cb.setViewports(0, { { static_cast<float>(x),
+                           static_cast<float>(static_cast<int>(fbHeight) - y - height), // Top-left origin flip
+                           static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f } });
 }
 
 void GfxRenderingApiDeko3d::SetScissor(int x, int y, int width, int height) {
+    std::uint32_t fbWidth = 0;
+    std::uint32_t fbHeight = 0;
+    mWindowBackend->GetDimensions(&fbWidth, &fbHeight, nullptr, nullptr);
+
+    const auto w = static_cast<int>(fbWidth);
+    const auto h = static_cast<int>(fbHeight);
+    const auto flippedY = h - y - height;
+
+    // deko3d rejects scissors outside the render target; clamp like Metal does.
+    const auto scissorX = static_cast<std::uint32_t>(std::clamp(x, 0, w));
+    const auto scissorY = static_cast<std::uint32_t>(std::clamp(flippedY, 0, h));
+    const auto scissorW = static_cast<std::uint32_t>(std::clamp(width, 0, w));
+    const auto scissorH = static_cast<std::uint32_t>(std::clamp(height, 0, h));
+
+    auto cb = mFrameCmdBuf;
+    cb.setScissors(0, { { scissorX, scissorY, scissorW, scissorH } });
 }
 
 void GfxRenderingApiDeko3d::SetUseAlpha(bool useAlpha) {
