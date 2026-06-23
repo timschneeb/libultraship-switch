@@ -26,6 +26,8 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
               std::uint32_t height, std::int32_t posX, std::int32_t posY) override;
     void Close() override;
 
+    static constexpr std::uint8_t sFramebuffers = 2;
+
     // ----------------------------------------------------------------------------------------------------------------
     // Timing
     // ----------------------------------------------------------------------------------------------------------------
@@ -69,14 +71,19 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
     dk::CmdBuf BeginFrameRecording();
     void EndFrameRecording(DkCmdList drawList);
 
+    dk::Device GetDevice() const;
+    dk::Queue GetQueue() const;
+
+    const dk::Image& GetFramebuffer(int slot) const;
+    // Slot acquired for the current frame, or -1 between frames. The rendering API binds this framebuffer as its
+    // render target.
+    int GetCurrentImageSlot() const;
+
     // Resources the rapi binds while recording (window backend owns GPU memory; rapi borrows).
     const dk::Shader& GetColorVsh() const;
     const dk::Shader& GetColorFsh() const;
-    DkGpuAddr GetVtxGpuAddr() const;
-    std::uint32_t GetVtxSize() const;
 
-    dk::Device GetDevice() const;
-    dk::Queue GetQueue() const;
+    std::uint32_t GetRecordingRing() const;
 
     // ----------------------------------------------------------------------------------------------------------------
     // Keyboard (no-op)
@@ -100,12 +107,11 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
     void SetMouseCapture(bool capture) override;
     bool IsMouseCaptured() override;
 
-    // Slot acquired for the current frame, or -1 between frames. The rendering API binds this framebuffer as its
-    // render target.
-    int GetCurrentImageSlot() const;
-    const dk::Image& GetFramebuffer(int slot) const;
+    // ----------------------------------------------------------------------------------------------------------------
+    // Debug
+    // ----------------------------------------------------------------------------------------------------------------
 
-    static constexpr std::uint8_t sFramebuffers = 2;
+    void Trace(const char* message);
 
   private:
     void CreateDeko3dDevice();
@@ -124,6 +130,7 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
     // Framebuffer images live in a single GPU-cached image memblock.
     dk::UniqueMemBlock mFbMemBlock = {};
     std::array<dk::Image, sFramebuffers> mFramebuffers = {};
+    std::int32_t mCurrentSlot = -1;
 
     // Command memory + a cmdbuf holding the pre-recorded per-slot clear lists.
     dk::UniqueMemBlock mCmdMemBlock = {};
@@ -135,9 +142,6 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
     dk::Shader mColorVsh = {};
     dk::Shader mColorFsh = {};
     std::uint32_t mShaderCodeOffset = 0;
-    dk::UniqueMemBlock mVtxMemBlock = {};
-    DkGpuAddr mVtxGpuAddr = 0;
-    std::uint32_t mVtxSize = 0;
 
     // Command region + cmdbuf + fence per swap chain image, cycled each frame; the fence gates reuse so we never
     // rerecord memory the GPU is still executing.
@@ -152,7 +156,6 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
 
     std::uint32_t mWidth = 1280;
     std::uint32_t mHeight = 720;
-    std::int32_t mCurrentSlot = -1;
     std::int32_t mTargetFps = 60;
     bool mIsRunning = true;
     bool mIsInitialized = false;

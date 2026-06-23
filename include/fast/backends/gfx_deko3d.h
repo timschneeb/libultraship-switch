@@ -94,7 +94,16 @@ class GfxRenderingApiDeko3d final : public GfxRenderingAPI {
     GfxWindowBackendDeko3d* mWindowBackend = nullptr;
     FilteringMode mTextureFilter = FILTER_THREE_POINT;
 
-    dk::CmdBuf mFrameCmdBuf = {};
+    static constexpr std::uint8_t sVtxRing = GfxWindowBackendDeko3d::sFramebuffers; // Must be same swap chain depth
+    ShaderProgramDeko3d mProgram = {}; // One color handle returned for every shader ID
+    dk::CmdBuf mFrameCmdBuf = {};      // Borrowed frame cmdbuf (set in StartFrame)
+    std::uint32_t mRing = 0;           // Current ring slot
+    bool mIsUsingAlpha = false;        // From SetUseAlpha: selects the vec3/vec4 input stride
+
+    std::array<dk::UniqueMemBlock, sVtxRing> mVtxRingMemBlock = {};
+    std::array<DkGpuAddr, sVtxRing> mVtxRingGpu = {};
+    std::array<std::uint8_t*, sVtxRing> mVtxRingCpu = {};
+    std::array<std::uint32_t, sVtxRing> mVtxRingOffset = {};
 };
 } // namespace Fast
 #endif

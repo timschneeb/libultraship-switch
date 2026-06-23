@@ -13,10 +13,11 @@
 namespace Fast {
 
 namespace {
-constexpr std::uint32_t gCmdMemSize = 0x10000;        // 64 KiB
-constexpr std::uint32_t gShaderCodeMemSize = 0x10000; // 64 KiB
-constexpr std::uint32_t gVtxMemSize = 0x1000;         // 4 KiB
-constexpr std::uint32_t gFrameCmdMemSize = 0x10000;   // 64 KiB per ring slot
+constexpr std::uint32_t gCmdMemSize = 0x10'000;        // 64 KiB
+constexpr std::uint32_t gShaderCodeMemSize = 0x10'000; // 64 KiB
+
+// TODO: Memory callback so the cmdbuf grows instead of aborting.
+constexpr std::uint32_t gFrameCmdMemSize = 0x200'000; // 2 MiB per slot
 
 // .dksh on-disk layout: [control section (control_sz bytes, starts with this header)][code section (code_sz bytes)]
 struct DkshHeader {
@@ -35,7 +36,7 @@ struct TracerVertex {
 
 static_assert(sizeof(TracerVertex) == 28, "vertex stride must match the shader's attribute layout");
 
-std::uint32_t AlignUp(std::uint32_t value, std::uint32_t alignment) {
+constexpr std::uint32_t AlignUp(std::uint32_t value, std::uint32_t alignment) {
     return value + alignment - 1 & ~(alignment - 1);
 }
 
@@ -83,20 +84,11 @@ void GfxWindowBackendDeko3d::CreateDeko3dDevice() {
                               .create();
     mShaderCodeOffset = DK_SHADER_CODE_ALIGNMENT;
 
-    // Static vertex buffer (clip-space positions, per-vertex color as the single input)
-    mVtxMemBlock = dk::MemBlockMaker{ mDevice, AlignUp(gVtxMemSize, DK_MEMBLOCK_ALIGNMENT) }
-                       .setFlags(DkMemBlockFlags_CpuCached | DkMemBlockFlags_GpuCached)
-                       .create();
-
     constexpr TracerVertex vertices[3] = {
         { { 0.0f, 0.6f, 0.0f, 1.0f }, { 1.0f, 0.0f, 0.0f } },
         { { -0.6f, -0.6f, 0.0f, 1.0f }, { 0.0f, 1.0f, 0.0f } },
         { { 0.6f, -0.6f, 0.0f, 1.0f }, { 0.0f, 0.0f, 1.0f } },
     };
-
-    std::memcpy(mVtxMemBlock.getCpuAddr(), vertices, sizeof(vertices));
-    mVtxGpuAddr = mVtxMemBlock.getGpuAddr();
-    mVtxSize = sizeof(vertices);
 
     // Per-frame command memory + cmdbufs (one per swap chain image).
     for (std::uint8_t i = 0; i < sFramebuffers; ++i) {
@@ -120,11 +112,11 @@ void GfxWindowBackendDeko3d::CreateSwapChain(std::uint32_t width, std::uint32_t 
         .setDimensions(width, height)
         .initialize(fbLayout);
 
-    const std::uint64_t fbSize = fbLayout.getSize();
-    const std::uint32_t fbAlign = fbLayout.getAlignment();
-    const std::uint32_t fbStride = AlignUp(static_cast<std::uint32_t>(fbSize), fbAlign);
+    const auto fbSize = fbLayout.getSize();
+    const auto fbAlign = fbLayout.getAlignment();
+    const auto fbStride = AlignUp(static_cast<std::uint32_t>(fbSize), fbAlign);
 
-    const std::uint32_t poolSize = AlignUp(fbStride * sFramebuffers, DK_MEMBLOCK_ALIGNMENT);
+    const auto poolSize = AlignUp(fbStride * sFramebuffers, DK_MEMBLOCK_ALIGNMENT);
     mFbMemBlock =
         dk::MemBlockMaker{ mDevice, poolSize }.setFlags(DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image).create();
 
@@ -299,7 +291,6 @@ void GfxWindowBackendDeko3d::Destroy() {
     mCmdBuf = nullptr;
     mCmdMemBlock = nullptr;
     mShaderCodeMemBlock = nullptr;
-    mVtxMemBlock = nullptr;
     mQueue = nullptr;
     mDevice = nullptr;
     mIsInitialized = false;
@@ -427,22 +418,6 @@ void GfxWindowBackendDeko3d::EndFrameRecording(DkCmdList drawList) {
     mHasFrameDrawList = true;
 }
 
-const dk::Shader& GfxWindowBackendDeko3d::GetColorVsh() const {
-    return mColorVsh;
-}
-
-const dk::Shader& GfxWindowBackendDeko3d::GetColorFsh() const {
-    return mColorFsh;
-}
-
-DkGpuAddr GfxWindowBackendDeko3d::GetVtxGpuAddr() const {
-    return mVtxGpuAddr;
-}
-
-std::uint32_t GfxWindowBackendDeko3d::GetVtxSize() const {
-    return mVtxSize;
-}
-
 dk::Device GfxWindowBackendDeko3d::GetDevice() const {
     return mDevice;
 }
@@ -451,12 +426,24 @@ dk::Queue GfxWindowBackendDeko3d::GetQueue() const {
     return mQueue;
 }
 
+const dk::Image& GfxWindowBackendDeko3d::GetFramebuffer(int slot) const {
+    return mFramebuffers[slot];
+}
+
 int GfxWindowBackendDeko3d::GetCurrentImageSlot() const {
     return mCurrentSlot;
 }
 
-const dk::Image& GfxWindowBackendDeko3d::GetFramebuffer(int slot) const {
-    return mFramebuffers[slot];
+const dk::Shader& GfxWindowBackendDeko3d::GetColorVsh() const {
+    return mColorVsh;
+}
+
+const dk::Shader& GfxWindowBackendDeko3d::GetColorFsh() const {
+    return mColorFsh;
+}
+
+std::uint32_t GfxWindowBackendDeko3d::GetRecordingRing() const {
+    return mRecordingRing;
 }
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -522,6 +509,10 @@ void GfxWindowBackendDeko3d::SetMouseCapture(bool capture) {
 
 bool GfxWindowBackendDeko3d::IsMouseCaptured() {
     return false;
+}
+
+void GfxWindowBackendDeko3d::Trace(const char* message) {
+    Deko3dTrace(message);
 }
 } // namespace Fast
 #endif
