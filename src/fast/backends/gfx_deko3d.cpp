@@ -47,15 +47,29 @@ void GfxRenderingApiDeko3d::UnloadShader(ShaderProgram* oldPrg) {
 }
 
 void GfxRenderingApiDeko3d::LoadShader(ShaderProgram* newPrg) {
+    mCurrentProgram = reinterpret_cast<ShaderProgramDeko3d*>(newPrg);
 }
 
 void GfxRenderingApiDeko3d::ClearShaderCache() {
+    mShaderProgramPool.clear();
+    mCurrentProgram = nullptr;
 }
 
 ShaderProgram* GfxRenderingApiDeko3d::CreateAndLoadNewShader(std::uint64_t shaderId1, std::uint64_t shaderId2) {
-    mProgram.ShaderId1 = shaderId1;
-    mProgram.ShaderId2 = shaderId2;
-    return reinterpret_cast<ShaderProgram*>(&mProgram);
+    CCFeatures cc = {};
+    gfx_cc_get_features(shaderId1, shaderId2, &cc);
+
+    ShaderProgramDeko3d& prg = mShaderProgramPool[{ shaderId1, shaderId2 }];
+    prg.ShaderId1 = shaderId1;
+    prg.ShaderId2 = shaderId2;
+    // opt_fog/opt_grayscale/opt_alpha are folded into shaderId from RDP state by the interpreter before lookup, so they
+    // fully determine this program's per-vertex packing.
+    prg.OptFog = cc.opt_fog;
+    prg.OptGrayscale = cc.opt_grayscale;
+    prg.OptAlpha = cc.opt_alpha;
+
+    LoadShader(reinterpret_cast<ShaderProgram*>(&prg));
+    return reinterpret_cast<ShaderProgram*>(&prg);
 }
 
 ShaderProgram* GfxRenderingApiDeko3d::LookupShader(std::uint64_t shaderId1, std::uint64_t shaderId2) {
@@ -76,7 +90,12 @@ ShaderProgram* GfxRenderingApiDeko3d::LookupShader(std::uint64_t shaderId1, std:
     }
 #endif
 
-    return reinterpret_cast<ShaderProgram*>(&mProgram); // Single variant -> always found
+    const auto i = mShaderProgramPool.find({ shaderId1, shaderId2 });
+    if (i == mShaderProgramPool.end()) {
+        return nullptr; // Miss -> interpreter calls CreateAndLoadNewShader, matching the OGL contract
+    }
+
+    return reinterpret_cast<ShaderProgram*>(&i->second);
 }
 
 void GfxRenderingApiDeko3d::ShaderGetInfo(ShaderProgram* prg, std::uint8_t* numInputs, bool usedTextures[2]) {
@@ -203,9 +222,22 @@ void GfxRenderingApiDeko3d::DrawTriangles(float bufVbo[], std::size_t bufVboLen,
     const DkGpuAddr vtxAddr = mVtxRingGpu[mRing] + offset;
     mVtxRingOffset[mRing] = offset + dataBytes;
 
-    // Inputs are packed last; the single forced input is the final (3 + alpha) floats.  Read its RGB.
+    // Forward offset of the first combiner input, computed from the bound program's decoded packing flags in the
+    // interpreter's mBufVbo order: pos(4) -> fog(4)? -> grayscale(4)? -> inputs (usedTextures is forced false in
+    // ShaderGetInfo, so no texcoord/clamp floats are packed yet).
+    const std::uint32_t fogFloats = mCurrentProgram && mCurrentProgram->OptFog ? 4u : 0u;
+    const std::uint32_t grayFloats = mCurrentProgram && mCurrentProgram->OptGrayscale ? 4u : 0u;
+    const std::uint32_t inputOffsetBytes = (4u + fogFloats + grayFloats) * static_cast<std::uint32_t>(sizeof(float));
+
+    // Equivalence probe: while numInputs is forced to 1, the single input is also the tail block, so the forward
+    // offset must equal the proven tail offset stride-(3 + alpha).  A mismatch means the forward packing model
+    // diverges from the interpreter -> fault is localized here, not downstream.
     const std::uint32_t inputFloats = 3u + (mUseAlpha ? 1u : 0u);
-    const std::uint32_t inputOffsetBytes = (strideFloats - inputFloats) * static_cast<std::uint32_t>(sizeof(float));
+
+    if (const std::uint32_t tailOffsetBytes = (strideFloats - inputFloats) * static_cast<std::uint32_t>(sizeof(float));
+        inputOffsetBytes != tailOffsetBytes) {
+        mWindowBackend->Trace("forward/tail vtx offset mismatch");
+    }
 
     auto cb = mFrameCmdBuf;
 
