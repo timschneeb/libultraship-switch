@@ -13,10 +13,9 @@
 namespace Fast {
 
 namespace {
-constexpr std::uint32_t gCmdMemSize = 0x10000;          // 64 KiB
-constexpr std::uint32_t gShaderCodeMemSize = 0x10000;   // 64 KiB
-constexpr std::uint32_t gFrameCmdInitialSize = 0x10000; // Initial 64 KiB per slot
-constexpr std::uint32_t gFrameCmdChunk = 0x40000;       // 256 KiB growth granularity
+constexpr std::uint32_t gCmdMemSize = 0x10000;        // 64 KiB
+constexpr std::uint32_t gShaderCodeMemSize = 0x10000; // 64 KiB
+constexpr std::uint32_t gFrameCmdMemSize = 0x400000;  // 4 MiB per slot
 
 // .dksh on-disk layout: [control section (control_sz bytes, starts with this header)][code section (code_sz bytes)]
 struct DkshHeader {
@@ -61,18 +60,23 @@ void Deko3dDebugCallback(void* userData, const char* context, DkResult result, c
     Deko3dTrace(buffer);
 }
 
-// deko3d calls this when a frame cmdbuf runs out of recording space.  Grow it; the block stays alive in the slot's
-// vector and is reused after clear() until teardown.
-void Deko3dFrameCmdAddMem(void* userData, DkCmdBuf cmdbuf, std::size_t minReqSize) {
-    const auto memory = static_cast<Deko3dFrameCmdMem*>(userData);
-    const auto size = AlignUp(std::max(static_cast<std::uint32_t>(minReqSize), gFrameCmdChunk), DK_MEMBLOCK_ALIGNMENT);
+// ---------
 
-    auto block = dk::MemBlockMaker{ memory->Device, size }
-                     .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
-                     .create();
-    dk::CmdBuf{ cmdbuf }.addMemory(block, 0, size);
-    memory->Blocks.push_back(std::move(block));
+std::int64_t NowNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
 }
+
+std::int64_t gDbgFence = 0;
+std::int64_t gDbgAcquire = 0;
+std::int64_t gDbgSubmit = 0;
+std::int64_t gDbgPresent = 0;
+std::int64_t gDbgRecord = 0;
+std::int64_t gDbgFenceMax = 0;
+std::int64_t gDbgAcquireMax = 0;
+std::int64_t gDbgPresentMax = 0;
+std::int64_t gDbgRecordStart = 0;
+std::int32_t gDbgFrames = 0;
 } // namespace
 
 GfxWindowBackendDeko3d::~GfxWindowBackendDeko3d() {
@@ -97,15 +101,13 @@ void GfxWindowBackendDeko3d::CreateDeko3dDevice() {
     mShaderCodeOffset = DK_SHADER_CODE_ALIGNMENT;
 
     for (std::uint8_t i = 0; i < sFramebuffers; ++i) {
-        mFrameCmdMem[i].Device = mDevice;
-        mFrameCmdBuf[i] =
-            dk::CmdBufMaker{ mDevice }.setUserData(&mFrameCmdMem[i]).setCbAddMem(&Deko3dFrameCmdAddMem).create();
+        mFrameCmdBuf[i] = dk::CmdBufMaker{ mDevice }.create();
 
-        auto initial = dk::MemBlockMaker{ mDevice, AlignUp(gFrameCmdInitialSize, DK_MEMBLOCK_ALIGNMENT) }
-                           .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
-                           .create();
-        mFrameCmdBuf[i].addMemory(initial, 0, gFrameCmdInitialSize);
-        mFrameCmdMem[i].Blocks.push_back(std::move(initial));
+        mFrameCmdMemBlock[i] = dk::MemBlockMaker{ mDevice, AlignUp(gFrameCmdMemSize, DK_MEMBLOCK_ALIGNMENT) }
+                                   .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
+                                   .create();
+
+        mFrameCmdBuf[i].addMemory(mFrameCmdMemBlock[i], 0, gFrameCmdMemSize);
     }
 }
 
@@ -313,7 +315,16 @@ void GfxWindowBackendDeko3d::SwapBuffersBegin() {
         return;
     }
 
+    gDbgRecord += NowNs() - gDbgRecordStart;
+
+    const auto a0 = NowNs();
     mCurrentSlot = mQueue.acquireImage(mSwapChain);
+    const auto a1 = NowNs();
+    gDbgAcquire += a1 - a0;
+
+    if (a1 - a0 > gDbgAcquireMax) {
+        gDbgAcquireMax = a1 - a0;
+    }
 
     mQueue.submitCommands(mClearCmdLists[mCurrentSlot]); // RT + viewport + scissor + clear
 
@@ -323,10 +334,32 @@ void GfxWindowBackendDeko3d::SwapBuffersBegin() {
 
     mQueue.signalFence(mFrameFence[mRecordingRing]); // Signals after the draws complete
     mIsFrameFenceValid[mRecordingRing] = true;
+    gDbgSubmit += NowNs() - a1;
 
     SyncFrameRateWithTime();
 
+    const auto p0 = NowNs();
     mQueue.presentImage(mSwapChain, mCurrentSlot);
+    const auto p1 = NowNs();
+    gDbgPresent += p1 - p0;
+
+    if (p1 - p0 > gDbgPresentMax) {
+        gDbgPresentMax = p1 - p0;
+    }
+
+    if (++gDbgFrames >= 60) {
+        char buf[320];
+        std::snprintf(buf, sizeof(buf),
+                      "[deko-perf] avg us/60f: fence=%lld acquire=%lld submit=%lld present=%lld record=%lld | "
+                      "max us: fence=%lld acquire=%lld present=%lld",
+                      gDbgFence / 60 / 1000, gDbgAcquire / 60 / 1000, gDbgSubmit / 60 / 1000, gDbgPresent / 60 / 1000,
+                      gDbgRecord / 60 / 1000, gDbgFenceMax / 1000, gDbgAcquireMax / 1000, gDbgPresentMax / 1000);
+
+        Deko3dTrace(buf);
+        gDbgFence = gDbgAcquire = gDbgSubmit = gDbgPresent = gDbgRecord = 0;
+        gDbgFenceMax = gDbgAcquireMax = gDbgPresentMax = 0;
+        gDbgFrames = 0;
+    }
 
     ++mFrameIndex;
     mHasFrameDrawList = false;
@@ -349,7 +382,7 @@ void GfxWindowBackendDeko3d::Destroy() {
 
     for (std::uint8_t i = 0; i < sFramebuffers; ++i) {
         mFrameCmdBuf[i] = nullptr;
-        mFrameCmdMem[i].Blocks.clear();
+        mFrameCmdMemBlock[i] = nullptr;
     }
 
     mCmdBuf = nullptr;
@@ -469,11 +502,24 @@ bool GfxWindowBackendDeko3d::IsFullscreen() {
 
 dk::CmdBuf GfxWindowBackendDeko3d::BeginFrameRecording() {
     mRecordingRing = mFrameIndex % sFramebuffers;
+
+    const auto t0 = NowNs();
+
     if (mIsFrameFenceValid[mRecordingRing]) {
         mFrameFence[mRecordingRing].wait(); // Gate reuse of this ring slot's command memory
     }
 
+    const auto t1 = NowNs();
+    gDbgFence += t1 - t0;
+
+    if (t1 - t0 > gDbgFenceMax) {
+        gDbgFenceMax = t1 - t0;
+    }
+
     mFrameCmdBuf[mRecordingRing].clear();
+
+    gDbgRecordStart = NowNs();
+
     return mFrameCmdBuf[mRecordingRing];
 }
 

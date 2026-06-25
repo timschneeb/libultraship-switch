@@ -8,17 +8,6 @@
 
 namespace Fast {
 /**
- * @brief Per-frame-cmdbuf command memory.
- *
- * The initial block plus any blocks the grow-callback adds.  Held stably so it outlives the cmdbuf and is freed at
- * teardown.
- */
-struct Deko3dFrameCmdMem {
-    dk::Device Device = {};
-    std::vector<dk::UniqueMemBlock> Blocks = {};
-};
-
-/**
  * @brief: Window/timing/presentation backend for deko3d.
  *
  * Ownership: this class owns dk::Device, dk::Queue, and dk::Swapchain bound to nWindowGetDefault().
@@ -162,7 +151,7 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
 
     // Command region + cmdbuf + fence per swap chain image, cycled each frame; the fence gates reuse so we never
     // rerecord memory the GPU is still executing.
-    std::array<Deko3dFrameCmdMem, sFramebuffers> mFrameCmdMem = {};
+    std::array<dk::UniqueMemBlock, sFramebuffers> mFrameCmdMemBlock = {};
     std::array<dk::UniqueCmdBuf, sFramebuffers> mFrameCmdBuf = {};
     std::array<dk::Fence, sFramebuffers> mFrameFence = {};
     std::array<bool, sFramebuffers> mIsFrameFenceValid = {};

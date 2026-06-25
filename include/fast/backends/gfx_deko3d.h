@@ -108,6 +108,10 @@ class GfxRenderingApiDeko3d final : public GfxRenderingAPI {
     std::array<DkGpuAddr, sVtxRing> mVtxRingGpu = {};
     std::array<std::uint8_t*, sVtxRing> mVtxRingCpu = {};
     std::array<std::uint32_t, sVtxRing> mVtxRingOffset = {};
+
+#if defined(DEKO3D_VARIANT_SURVEY)
+    std::set<std::string> mSeenVariants = {};
+#endif
 };
 } // namespace Fast
 #endif

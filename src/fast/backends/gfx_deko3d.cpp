@@ -1,12 +1,25 @@
 #if defined(ENABLE_DEKO3D)
 #include "fast/backends/gfx_deko3d.h"
+#include "fast/interpreter.h"
 
 namespace {
-constexpr std::uint32_t gVtxRingSize = 0x800'000; // 8 MiB per slot
+constexpr std::uint32_t gVtxRingSize = 0x800000; // 8 MiB per slot
 
 constexpr std::uint32_t AlignUp(std::uint32_t value, std::uint32_t alignment) {
     return value + alignment - 1 & ~(alignment - 1);
 }
+
+// -----------
+
+std::int64_t NowNs() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+std::int64_t gDrawNs = 0;
+std::int64_t gMemCpyNs = 0;
+std::int32_t gDrawCalls = 0;
+std::int32_t gDrawFrames = 0;
 } // namespace
 
 namespace Fast {
@@ -46,6 +59,23 @@ ShaderProgram* GfxRenderingApiDeko3d::CreateAndLoadNewShader(std::uint64_t shade
 }
 
 ShaderProgram* GfxRenderingApiDeko3d::LookupShader(std::uint64_t shaderId1, std::uint64_t shaderId2) {
+#if defined(DEKO3D_VARIANT_SURVEY)
+    CCFeatures cc = {};
+    gfx_cc_get_features(shaderId1, shaderId2, &cc);
+
+    char axes[96];
+    std::snprintf(axes, sizeof(axes), "tex=%d%d alpha=%d 2cyc=%d fog=%d gray=%d inputs=%d clamp=%d%d%d%d",
+                  cc.usedTextures[0], cc.usedTextures[1], cc.opt_alpha, cc.opt_2cyc, cc.opt_fog, cc.opt_grayscale,
+                  cc.numInputs, cc.clamp[0][0], cc.clamp[0][1], cc.clamp[1][0], cc.clamp[1][1]);
+
+    if (mSeenVariants.insert(axes).second) { // First sighting of this layout variant
+        char line[192];
+        std::snprintf(line, sizeof(line), "[deko-variant #%zu] %s firstId=%016llx_%016llx", mSeenVariants.size(), axes,
+                      static_cast<unsigned long long>(shaderId1), static_cast<unsigned long long>(shaderId2));
+        mWindowBackend->Trace(line); // Crash-sync sink -> logs/deko3d_trace.log
+    }
+#endif
+
     return reinterpret_cast<ShaderProgram*>(&mProgram); // Single variant -> always found
 }
 
@@ -153,6 +183,8 @@ void GfxRenderingApiDeko3d::DrawTriangles(float bufVbo[], std::size_t bufVboLen,
         return;
     }
 
+    const auto drawT0 = NowNs();
+
     const std::uint32_t vertexCount = static_cast<std::uint32_t>(3 * bufVboNumTris);
     const std::uint32_t strideFloats = static_cast<std::uint32_t>(bufVboLen / vertexCount);
     const std::uint32_t strideBytes = strideFloats * static_cast<std::uint32_t>(sizeof(float));
@@ -164,7 +196,10 @@ void GfxRenderingApiDeko3d::DrawTriangles(float bufVbo[], std::size_t bufVboLen,
         return; // Drop the batch rather than overrun
     }
 
+    const auto cpyT0 = NowNs();
     std::memcpy(mVtxRingCpu[mRing] + offset, bufVbo, dataBytes);
+    gMemCpyNs += NowNs() - cpyT0;
+
     const DkGpuAddr vtxAddr = mVtxRingGpu[mRing] + offset;
     mVtxRingOffset[mRing] = offset + dataBytes;
 
@@ -189,6 +224,9 @@ void GfxRenderingApiDeko3d::DrawTriangles(float bufVbo[], std::size_t bufVboLen,
     cb.bindVtxBufferState({ { strideBytes, 0 } });
     cb.bindVtxBuffer(0, vtxAddr, dataBytes);
     cb.draw(DkPrimitive_Triangles, vertexCount, 1, 0, 0);
+
+    ++gDrawCalls;
+    gDrawNs += NowNs() - drawT0;
 }
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -227,6 +265,16 @@ void GfxRenderingApiDeko3d::StartFrame() {
 
 void GfxRenderingApiDeko3d::EndFrame() {
     mWindowBackend->EndFrameRecording(mFrameCmdBuf.finishList());
+
+    if (++gDrawFrames >= 60) {
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "[deko-draw] avg us/60f: draw=%lld memcpy=%lld calls=%d", gDrawNs / 60 / 1000,
+                      gMemCpyNs / 60 / 1000, gDrawCalls / 60);
+        mWindowBackend->Trace(buf);
+
+        gDrawNs = gMemCpyNs = 0;
+        gDrawCalls = gDrawFrames = 0;
+    }
 }
 
 void GfxRenderingApiDeko3d::FinishRender() {
