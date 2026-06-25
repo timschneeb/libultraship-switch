@@ -3933,8 +3933,12 @@ bool gfx_set_timg_otr_hash_handler_custom(F3DGfx** cmd0) {
     }
 
     std::shared_ptr<Fast::Texture> texture = std::static_pointer_cast<Fast::Texture>(
+#if defined(__SWITCH__)
+    Ship::Context::GetRawInstance()->GetResourceManager()->GetResourceByCrc(hash));
+#else
         Ship::Context::GetRawInstance()->GetResourceManager()->LoadResourceProcess(
             Ship::Context::GetRawInstance()->GetResourceManager()->GetArchiveManager()->HashToCString(hash)));
+#endif
     if (texture != nullptr) {
         texFlags = texture->Flags;
         rawTexMetadata.width = texture->Width;

@@ -400,6 +400,15 @@ class ResourceManager {
      */
     void* GetResourceRawPointer(const char* name);
 
+#if defined(__SWITCH__)
+    /**
+     * @brief
+     * @param crc
+     * @return
+     */
+    std::shared_ptr<IResource> GetResourceByCrc(std::uint64_t crc);
+#endif
+
     /**
      * @brief Returns a type-erased raw pointer to the payload of a resource by CRC.
      * @param crc 64-bit content hash.
@@ -418,6 +427,11 @@ class ResourceManager {
     std::shared_ptr<IResource> GetCachedResource(std::variant<ResourceLoadError, std::shared_ptr<IResource>> cacheLine);
 
   private:
+#if defined(__SWITCH__)
+    std::unordered_map<std::uint64_t, std::weak_ptr<IResource>> mCrcCache;
+    std::mutex mCrcCacheMutex;
+#endif
+
     std::unordered_map<ResourceIdentifier, std::variant<ResourceLoadError, std::shared_ptr<IResource>>,
                        ResourceIdentifierHash>
         mResourceCache;
