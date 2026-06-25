@@ -9,6 +9,18 @@ constexpr std::uint32_t AlignUp(std::uint32_t value, std::uint32_t alignment) {
     return value + alignment - 1 & ~(alignment - 1);
 }
 
+// std140 layout consumed by color.frag.glsl's CombinerUbo block. Four contiguous ivec4s (color0, alpha0, color1,
+// alpha1) match CCFeatures::c[2][2][4] byte-for-byte, then five ints.
+struct CombinerUbo {
+    std::int32_t C[2][2][4]; // [cycle][color/alpha][a,b,c,d]
+    std::int32_t NumInputs;
+    std::int32_t Do2Cyc;
+    std::int32_t OptAlpha;
+    std::int32_t OptFog;
+    std::int32_t OptGrayscale;
+    std::int32_t Pad[3]; // Pad to 16-byte multiple (std140 block size)
+};
+
 // -----------
 
 std::int64_t NowNs() {
@@ -56,19 +68,13 @@ void GfxRenderingApiDeko3d::ClearShaderCache() {
 }
 
 ShaderProgram* GfxRenderingApiDeko3d::CreateAndLoadNewShader(std::uint64_t shaderId1, std::uint64_t shaderId2) {
-    CCFeatures cc = {};
-    gfx_cc_get_features(shaderId1, shaderId2, &cc);
-
     ShaderProgramDeko3d& prg = mShaderProgramPool[{ shaderId1, shaderId2 }];
     prg.ShaderId1 = shaderId1;
     prg.ShaderId2 = shaderId2;
-    // opt_fog/opt_grayscale/opt_alpha are folded into shaderId from RDP state by the interpreter before lookup, so they
-    // fully determine this program's per-vertex packing.
-    prg.OptFog = cc.opt_fog;
-    prg.OptGrayscale = cc.opt_grayscale;
-    prg.OptAlpha = cc.opt_alpha;
 
+    gfx_cc_get_features(shaderId1, shaderId2, &prg.Cc);
     LoadShader(reinterpret_cast<ShaderProgram*>(&prg));
+
     return reinterpret_cast<ShaderProgram*>(&prg);
 }
 
@@ -99,13 +105,29 @@ ShaderProgram* GfxRenderingApiDeko3d::LookupShader(std::uint64_t shaderId1, std:
 }
 
 void GfxRenderingApiDeko3d::ShaderGetInfo(ShaderProgram* prg, std::uint8_t* numInputs, bool usedTextures[2]) {
-    if (numInputs) {
-        *numInputs = 1; // Pack exactly one input...
-    }
+    const auto cc = reinterpret_cast<ShaderProgramDeko3d*>(prg)->Cc;
+    const bool isUntextured = !cc.usedTextures[0] && !cc.usedTextures[1];
 
-    if (usedTextures) {
-        usedTextures[0] = false; // ...and no texcoords, so the input lands at stride-(3 + alpha).
-        usedTextures[1] = false;
+    if (isUntextured) {
+        if (numInputs) {
+            *numInputs = static_cast<std::uint8_t>(cc.numInputs);
+        }
+
+        if (usedTextures) {
+            usedTextures[0] = false;
+            usedTextures[1] = false;
+        }
+    } else {
+        // Textured draws need samplers.  Force the flat single-input packing so the interpreter lays out exactly what
+        // the passthrough path reads.
+        if (numInputs) {
+            *numInputs = 1;
+        }
+
+        if (usedTextures) {
+            usedTextures[0] = false;
+            usedTextures[1] = false;
+        }
     }
 }
 
@@ -222,22 +244,16 @@ void GfxRenderingApiDeko3d::DrawTriangles(float bufVbo[], std::size_t bufVboLen,
     const DkGpuAddr vtxAddr = mVtxRingGpu[mRing] + offset;
     mVtxRingOffset[mRing] = offset + dataBytes;
 
-    // Forward offset of the first combiner input, computed from the bound program's decoded packing flags in the
-    // interpreter's mBufVbo order: pos(4) -> fog(4)? -> grayscale(4)? -> inputs (usedTextures is forced false in
-    // ShaderGetInfo, so no texcoord/clamp floats are packed yet).
-    const std::uint32_t fogFloats = mCurrentProgram && mCurrentProgram->OptFog ? 4u : 0u;
-    const std::uint32_t grayFloats = mCurrentProgram && mCurrentProgram->OptGrayscale ? 4u : 0u;
-    const std::uint32_t inputOffsetBytes = (4u + fogFloats + grayFloats) * static_cast<std::uint32_t>(sizeof(float));
+    const auto& cc = mCurrentProgram->Cc;
+    const bool isUntextured = !cc.usedTextures[0] && !cc.usedTextures[1];
 
-    // Equivalence probe: while numInputs is forced to 1, the single input is also the tail block, so the forward
-    // offset must equal the proven tail offset stride-(3 + alpha).  A mismatch means the forward packing model
-    // diverges from the interpreter -> fault is localized here, not downstream.
-    const std::uint32_t inputFloats = 3u + (mUseAlpha ? 1u : 0u);
-
-    if (const std::uint32_t tailOffsetBytes = (strideFloats - inputFloats) * static_cast<std::uint32_t>(sizeof(float));
-        inputOffsetBytes != tailOffsetBytes) {
-        mWindowBackend->Trace("forward/tail vtx offset mismatch");
-    }
+    // Per-vertex attribute layout in the interpreter's packing order, forward-computed.
+    // usedTextures is reported false to the interpreter, so there are no texcoord/clamp floats.
+    const std::uint32_t inputWidth = cc.opt_alpha ? 4u : 3u; // floats per combiner input
+    const std::uint32_t numInputs = isUntextured ? static_cast<std::uint32_t>(cc.numInputs) : 1u;
+    const std::uint32_t fogFloats = cc.opt_fog ? 4u : 0u;
+    const std::uint32_t grayFloats = cc.opt_grayscale ? 4u : 0u;
+    const std::uint32_t inputsBase = 4u + fogFloats + grayFloats; // First input's float offset
 
     auto cb = mFrameCmdBuf;
 
@@ -248,11 +264,56 @@ void GfxRenderingApiDeko3d::DrawTriangles(float bufVbo[], std::size_t bufVboLen,
             .setDepthWriteEnable(mDepthMask)
             .setDepthCompareOp(mDepthTest ? (mDecal ? DkCompareOp_Lequal : DkCompareOp_Less) : DkCompareOp_Always));
 
-    cb.bindVtxAttribState({
-        { 0, 0, 0, DkVtxAttribSize_4x32, DkVtxAttribType_Float, 0 },                // aVtxPos @ 0
-        { 0, 0, inputOffsetBytes, DkVtxAttribSize_3x32, DkVtxAttribType_Float, 0 }, // aInput1 @ adaptive
-    });
+    // ----------------------------------------------------------------------------------------------------------------
+    // Combiner uniform
+    // ----------------------------------------------------------------------------------------------------------------
 
+    CombinerUbo ubo = {};
+    if (isUntextured) {
+        std::memcpy(ubo.C, cc.c, sizeof(ubo.C)); // int[2][2][4] -> int32[2][2][4], same layout
+        ubo.NumInputs = cc.numInputs;
+        ubo.Do2Cyc = cc.opt_2cyc ? 1 : 0;
+        ubo.OptAlpha = cc.opt_alpha ? 1 : 0;
+        ubo.OptFog = cc.opt_fog ? 1 : 0;
+        ubo.OptGrayscale = cc.opt_grayscale ? 1 : 0;
+    } else {
+        // Passthrough: (input1 - 0) * 1 + 0 = input1, single cycle, no extras.  Keeps textured geometry exactly as the
+        // pre-combiner build.
+        ubo.C[0][0][0] = SHADER_INPUT_1;
+        ubo.C[0][0][1] = SHADER_0;
+        ubo.C[0][0][2] = SHADER_1;
+        ubo.C[0][0][3] = SHADER_0;
+        ubo.NumInputs = 1;
+    }
+
+    const auto uboOff = AlignUp(mUboRingOffset[mRing], DK_UNIFORM_BUF_ALIGNMENT);
+    if (uboOff + sUniformSlotSize > sUniformRingSize) {
+        mWindowBackend->Trace("DrawTriangles: UBO ring overflow (bump sUniformRingSize)");
+        return;
+    }
+
+    std::memcpy(mUboRingCpu[mRing] + uboOff, &ubo, sizeof(ubo));
+    const DkGpuAddr uboAddr = mUboRingGpu[mRing] + uboOff;
+
+    mUboRingOffset[mRing] = uboOff + sUniformSlotSize;
+    cb.bindUniformBuffer(DkStage_Fragment, 0, uboAddr, sUniformSlotSize);
+
+    // ----------------------------------------------------------------------------------------------------------------
+    // Vertex attributes: pos + N inputs
+    // ----------------------------------------------------------------------------------------------------------------
+
+    std::array<DkVtxAttribState, 1 + 7> attribs = {};
+    std::uint32_t attribCount = 0;
+    attribs[attribCount++] = { 0, 0, 0, DkVtxAttribSize_4x32, DkVtxAttribType_Float, 0 }; // aVtxPos @ 0
+
+    for (std::uint32_t i = 0; i < numInputs; ++i) {
+        const std::uint32_t offFloats = inputsBase + i * inputWidth;
+        attribs[attribCount++] = {
+            0, 0, offFloats * static_cast<std::uint32_t>(sizeof(float)), DkVtxAttribSize_3x32, DkVtxAttribType_Float, 0
+        }; // aInputN.rgb
+    }
+
+    cb.bindVtxAttribState(dk::detail::ArrayProxy<const DkVtxAttribState>(attribCount, attribs.data()));
     cb.bindVtxBufferState({ { strideBytes, 0 } });
     cb.bindVtxBuffer(0, vtxAddr, dataBytes);
     cb.draw(DkPrimitive_Triangles, vertexCount, 1, 0, 0);
@@ -272,17 +333,19 @@ void GfxRenderingApiDeko3d::Init() {
         mVtxRingMemBlock[i] = dk::MemBlockMaker{ device, AlignUp(gVtxRingSize, DK_MEMBLOCK_ALIGNMENT) }
                                   .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
                                   .create();
-
         mVtxRingGpu[i] = mVtxRingMemBlock[i].getGpuAddr();
         mVtxRingCpu[i] = static_cast<std::uint8_t*>(mVtxRingMemBlock[i].getCpuAddr());
-
         mVtxRingOffset[i] = 0;
     }
 
-    mUniformMemBlock = dk::MemBlockMaker{ device, DK_MEMBLOCK_ALIGNMENT }
-                           .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
-                           .create();
-    mUniformGpu = mUniformMemBlock.getGpuAddr();
+    for (std::uint8_t i = 0; i < sVtxRing; ++i) {
+        mUboRingMemBlock[i] = dk::MemBlockMaker{ device, AlignUp(sUniformRingSize, DK_MEMBLOCK_ALIGNMENT) }
+                                  .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
+                                  .create();
+        mUboRingGpu[i] = mUboRingMemBlock[i].getGpuAddr();
+        mUboRingCpu[i] = static_cast<std::uint8_t*>(mUboRingMemBlock[i].getCpuAddr());
+        mUboRingOffset[i] = 0;
+    }
 }
 
 void GfxRenderingApiDeko3d::OnResize() {
@@ -292,16 +355,13 @@ void GfxRenderingApiDeko3d::StartFrame() {
     mFrameCmdBuf = mWindowBackend->BeginFrameRecording();
     mRing = mWindowBackend->GetRecordingRing();
     mVtxRingOffset[mRing] = 0; // BeginFrameRecording already fence-waited this slot, so its memory is free
+    mUboRingOffset[mRing] = 0;
 
     auto cb = mFrameCmdBuf;
     cb.bindShaders(DkStageFlag_GraphicsMask, { &mWindowBackend->GetColorVsh(), &mWindowBackend->GetColorFsh() });
     cb.bindRasterizerState(dk::RasterizerState{}.setCullMode(DkFace_None));
     cb.bindColorState(dk::ColorState{});
     cb.bindColorWriteState(dk::ColorWriteState{});
-
-    static constexpr float sTint[4] = { 0.3, 1.0, 0.3, 1.0 };
-    cb.pushConstants(mUniformGpu, sUniformBufSize, 0, sizeof(sTint), sTint);
-    cb.bindUniformBuffer(DkStage_Fragment, 0, mUniformGpu, sUniformBufSize);
 }
 
 void GfxRenderingApiDeko3d::EndFrame() {

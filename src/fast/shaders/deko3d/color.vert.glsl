@@ -1,19 +1,27 @@
 #version 460
 
-// First real uber-variant: untextured, no alpha, 1 input, 1 cycle.  Vertex layout matches the interpreter's base
-// packing exactly:
-//   aVtxPos  vec4  @ byte 0   (x, y, z, w -- already in clip space, no MVP)
-//   aInput1  vec3  @ byte 16  (the single shade/combiner input, no alpha)
-// stride = 28 bytes.
+// Untextured combiner column.  Vertex layout matches the interpreter's packing with usedTextures=false:
+//   aVtxPos  vec4  @ byte 0
+//   aInput1..N vec3 each, N = numInputs (fog/grayscale floats, if packed, sit between pos and inputs and are simply
+//                                        not bound as attributes).
 //
-// Eventually, the interpreter's buf_vbo will feed these same attributes, unchanged.
+// The backend binds only the first numInputs inputs; the rest read defaults and are never selected.
 
-layout(location = 0) in vec4 aVtxPos;
-layout(location = 1) in vec3 aInput1;
+layout (location = 0) in vec4 aVtxPos;
+layout (location = 1) in vec3 aInput1;
+layout (location = 2) in vec3 aInput2;
+layout (location = 3) in vec3 aInput3;
+layout (location = 4) in vec3 aInput4;
 
-layout(location = 0) out vec3 vColor;
+layout (location = 0) out vec3 vInput1;
+layout (location = 1) out vec3 vInput2;
+layout (location = 2) out vec3 vInput3;
+layout (location = 3) out vec3 vInput4;
 
 void main() {
     gl_Position = aVtxPos;
-    vColor = aInput1;
+    vInput1 = aInput1;
+    vInput2 = aInput2;
+    vInput3 = aInput3;
+    vInput4 = aInput4;
 }

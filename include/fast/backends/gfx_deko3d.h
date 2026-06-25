@@ -3,6 +3,7 @@
 #if defined(ENABLE_DEKO3D)
 #include "gfx_rendering_api.h"
 #include "gfx_deko3d_window.h"
+#include "fast/interpreter.h"
 
 #include <map>
 #include <utility>
@@ -11,12 +12,9 @@ namespace Fast {
 struct ShaderProgramDeko3d {
     std::uint64_t ShaderId1 = 0;
     std::uint64_t ShaderId2 = 0;
-
-    // Decoded packing-affecting flags (from gfx_cc_get_features), used to locate per-vertex attributes in mBufVbo in
-    // the interpreter's packing order.  Mirrors what GfxRenderingAPIOGL bakes into its per-program attrib table.
-    bool OptFog = false;
-    bool OptGrayscale = false;
-    bool OptAlpha = false;
+    // Drives per-vertex attribute offsets, the variant key, and the combiner uniform.  Mirrors what GfxRenderingAPIOGL
+    // bakes into its per-program table.
+    CCFeatures Cc = {};
 };
 
 class GfxRenderingApiDeko3d final : public GfxRenderingAPI {
@@ -104,7 +102,8 @@ class GfxRenderingApiDeko3d final : public GfxRenderingAPI {
     FilteringMode mTextureFilter = FILTER_THREE_POINT;
 
     static constexpr std::uint8_t sVtxRing = GfxWindowBackendDeko3d::sFramebuffers; // Must be same swap chain depth
-    static constexpr std::uint32_t sUniformBufSize = DK_UNIFORM_BUF_ALIGNMENT;      // 0x100, 256-aligned bind size
+    static constexpr std::uint32_t sUniformSlotSize = DK_UNIFORM_BUF_ALIGNMENT;     // 0x100
+    static constexpr std::uint32_t sUniformRingSize = 0x40000;                      // 256 KiB -> 1024 draws/frame
 
     // Per-(id0,id1) program pool, mirroring GfxRenderingAPIOGL's contract: LookupShader misses return nullptr so the
     // interpreter calls CreateAndLoadNewShader, and we decode CCFeatures once.  std::map avoids pulling in a pair
@@ -114,8 +113,10 @@ class GfxRenderingApiDeko3d final : public GfxRenderingAPI {
     dk::CmdBuf mFrameCmdBuf = {};                   // Borrowed frame cmdbuf (set in StartFrame)
     std::uint32_t mRing = 0;                        // Current ring slot
 
-    dk::UniqueMemBlock mUniformMemBlock = {};
-    DkGpuAddr mUniformGpu = 0;
+    std::array<dk::UniqueMemBlock, sVtxRing> mUboRingMemBlock = {};
+    std::array<DkGpuAddr, sVtxRing> mUboRingGpu = {};
+    std::array<std::uint8_t*, sVtxRing> mUboRingCpu = {};
+    std::array<std::uint32_t, sVtxRing> mUboRingOffset = {};
 
     bool mUseAlpha = false; // From SetUseAlpha: selects the vec3/vec4 input stride
     bool mDepthTest = false;
