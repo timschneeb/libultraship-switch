@@ -104,13 +104,18 @@ class GfxRenderingApiDeko3d final : public GfxRenderingAPI {
     FilteringMode mTextureFilter = FILTER_THREE_POINT;
 
     static constexpr std::uint8_t sVtxRing = GfxWindowBackendDeko3d::sFramebuffers; // Must be same swap chain depth
+    static constexpr std::uint32_t sUniformBufSize = DK_UNIFORM_BUF_ALIGNMENT;      // 0x100, 256-aligned bind size
+
     // Per-(id0,id1) program pool, mirroring GfxRenderingAPIOGL's contract: LookupShader misses return nullptr so the
-    // interpreter calls CreateAndLoadNewShader, and we decode CCFeatures once.std::map avoids pulling in a pair
+    // interpreter calls CreateAndLoadNewShader, and we decode CCFeatures once.  std::map avoids pulling in a pair
     // hasher; lookups are already cached in comb->prg[tm].
     std::map<std::pair<std::uint64_t, std::uint64_t>, ShaderProgramDeko3d> mShaderProgramPool = {};
     ShaderProgramDeko3d* mCurrentProgram = nullptr; // Set by LoadShader; the batch being drawn
     dk::CmdBuf mFrameCmdBuf = {};                   // Borrowed frame cmdbuf (set in StartFrame)
     std::uint32_t mRing = 0;                        // Current ring slot
+
+    dk::UniqueMemBlock mUniformMemBlock = {};
+    DkGpuAddr mUniformGpu = 0;
 
     bool mUseAlpha = false; // From SetUseAlpha: selects the vec3/vec4 input stride
     bool mDepthTest = false;

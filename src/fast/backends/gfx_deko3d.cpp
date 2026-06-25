@@ -278,6 +278,11 @@ void GfxRenderingApiDeko3d::Init() {
 
         mVtxRingOffset[i] = 0;
     }
+
+    mUniformMemBlock = dk::MemBlockMaker{ device, DK_MEMBLOCK_ALIGNMENT }
+                           .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
+                           .create();
+    mUniformGpu = mUniformMemBlock.getGpuAddr();
 }
 
 void GfxRenderingApiDeko3d::OnResize() {
@@ -293,6 +298,10 @@ void GfxRenderingApiDeko3d::StartFrame() {
     cb.bindRasterizerState(dk::RasterizerState{}.setCullMode(DkFace_None));
     cb.bindColorState(dk::ColorState{});
     cb.bindColorWriteState(dk::ColorWriteState{});
+
+    static constexpr float sTint[4] = { 0.3, 1.0, 0.3, 1.0 };
+    cb.pushConstants(mUniformGpu, sUniformBufSize, 0, sizeof(sTint), sTint);
+    cb.bindUniformBuffer(DkStage_Fragment, 0, mUniformGpu, sUniformBufSize);
 }
 
 void GfxRenderingApiDeko3d::EndFrame() {
