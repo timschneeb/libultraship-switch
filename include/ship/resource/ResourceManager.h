@@ -400,6 +400,24 @@ class ResourceManager {
      */
     void* GetResourceRawPointer(const char* name);
 
+#if defined(__SWITCH__)
+    /**
+     * @brief Resolves a resource by CRC through a CRC-keyed fast cache, bypassing the string-reverse look-up, global
+     *        lock, and promise/future allocation that LoadResource(crc) incurs per call.
+     *        Backs GetResourceRawPointer(crc) on the Fast3D hot patch (called per draw command); misses fall back to
+     *        LoadResource(crc) and memoize the result.
+     *
+     * @param crc 64-bit content hash identifying the resource.
+     *
+     * @return Cached or freshly resolved IResource, or nullptr if the CRC is not found.
+     *
+     * @note The cache stores weak_ptrs and never extends resource lifetime: an entry whose resource has been unloaded
+     *       simply misses and reresolves, so no explicit invalidation is needed on unload.  It is cleared on alt-asset
+     *       (HD texture) toggle so base/replacement textures reresolve correctly.
+     */
+    std::shared_ptr<IResource> GetResourceByCrc(std::uint64_t crc);
+#endif
+
     /**
      * @brief Returns a type-erased raw pointer to the payload of a resource by CRC.
      * @param crc 64-bit content hash.
@@ -418,6 +436,11 @@ class ResourceManager {
     std::shared_ptr<IResource> GetCachedResource(std::variant<ResourceLoadError, std::shared_ptr<IResource>> cacheLine);
 
   private:
+#if defined(__SWITCH__)
+    std::unordered_map<std::uint64_t, std::weak_ptr<IResource>> mCrcCache;
+    std::mutex mCrcCacheMutex;
+#endif
+
     std::unordered_map<ResourceIdentifier, std::variant<ResourceLoadError, std::shared_ptr<IResource>>,
                        ResourceIdentifierHash>
         mResourceCache;
