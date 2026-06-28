@@ -285,19 +285,19 @@ void GfxWindowBackendDeko3d::Init(const char* gameName, const char* apiName, boo
         Deko3dTrace("Init: romfsInit failed (no embedded romfs?)");
     }
 
-    if (!LoadDeko3dShader(mColorVsh, "romfs:/shaders/deko3d/color.vert.dksh")) {
+    if (!LoadDeko3dShader(mColorVsh, "romfs:/shaders/color.vert.dksh")) {
         Deko3dTrace("Init: color vsh load failed");
     }
 
-    if (!LoadDeko3dShader(mColorFsh, "romfs:/shaders/deko3d/color.frag.dksh")) {
+    if (!LoadDeko3dShader(mColorFsh, "romfs:/shaders/color.frag.dksh")) {
         Deko3dTrace("Init: color fsh load failed");
     }
 
-    if (!LoadDeko3dShader(mColorTextureVsh, "romfs:/shaders/deko3d/color_texture.vert.dksh")) {
+    if (!LoadDeko3dShader(mColorTextureVsh, "romfs:/shaders/color_texture.vert.dksh")) {
         Deko3dTrace("Init: color_texture vsh load failed");
     }
 
-    if (!LoadDeko3dShader(mColorTextureFsh, "romfs:/shaders/deko3d/color_texture.frag.dksh")) {
+    if (!LoadDeko3dShader(mColorTextureFsh, "romfs:/shaders/color_texture.frag.dksh")) {
         Deko3dTrace("Init: color_texture fsh load failed");
     }
 
