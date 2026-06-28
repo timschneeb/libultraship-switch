@@ -14,7 +14,7 @@ namespace Fast {
 
 namespace {
 constexpr std::uint32_t gCmdMemSize = 0x10000;        // 64 KiB
-constexpr std::uint32_t gShaderCodeMemSize = 0x10000; // 64 KiB
+constexpr std::uint32_t gShaderCodeMemSize = 0x20000; // 128 KiB
 constexpr std::uint32_t gFrameCmdMemSize = 0x400000;  // 4 MiB per slot
 
 // .dksh on-disk layout: [control section (control_sz bytes, starts with this header)][code section (code_sz bytes)]
@@ -165,8 +165,6 @@ void GfxWindowBackendDeko3d::CreateSwapChain(std::uint32_t width, std::uint32_t 
 }
 
 void GfxWindowBackendDeko3d::RecordClearCommandLists() {
-    // Pre-record one bind+clear list per framebuffer. The lists coexist in mCmdBuf's memory (no clear() between
-    // recordings), so per frame we only acquire -> submit[slot] -> present.
     mCmdBuf.clear();
 
     for (std::uint8_t i = 0; i < sFramebuffers; ++i) {
@@ -293,6 +291,14 @@ void GfxWindowBackendDeko3d::Init(const char* gameName, const char* apiName, boo
 
     if (!LoadDeko3dShader(mColorFsh, "romfs:/shaders/deko3d/color.frag.dksh")) {
         Deko3dTrace("Init: color fsh load failed");
+    }
+
+    if (!LoadDeko3dShader(mColorTextureVsh, "romfs:/shaders/deko3d/color_texture.vert.dksh")) {
+        Deko3dTrace("Init: color_texture vsh load failed");
+    }
+
+    if (!LoadDeko3dShader(mColorTextureFsh, "romfs:/shaders/deko3d/color_texture.frag.dksh")) {
+        Deko3dTrace("Init: color_texture fsh load failed");
     }
 
     Deko3dTrace("Init: creating swap chain");
@@ -550,6 +556,14 @@ const dk::Shader& GfxWindowBackendDeko3d::GetColorVsh() const {
 
 const dk::Shader& GfxWindowBackendDeko3d::GetColorFsh() const {
     return mColorFsh;
+}
+
+const dk::Shader& GfxWindowBackendDeko3d::GetColorTextureVsh() const {
+    return mColorTextureVsh;
+}
+
+const dk::Shader& GfxWindowBackendDeko3d::GetColorTextureFsh() const {
+    return mColorTextureFsh;
 }
 
 std::uint32_t GfxWindowBackendDeko3d::GetRecordingRing() const {

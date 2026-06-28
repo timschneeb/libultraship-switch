@@ -19,14 +19,14 @@ namespace Fast {
  */
 class GfxWindowBackendDeko3d final : public GfxWindowBackend {
   public:
+    static constexpr std::uint8_t sFramebuffers = 2;
+
     GfxWindowBackendDeko3d() = default;
     ~GfxWindowBackendDeko3d() override;
 
     void Init(const char* gameName, const char* apiName, bool startFullScreen, std::uint32_t width,
               std::uint32_t height, std::int32_t posX, std::int32_t posY) override;
     void Close() override;
-
-    static constexpr std::uint8_t sFramebuffers = 2;
 
     // ----------------------------------------------------------------------------------------------------------------
     // Timing
@@ -82,6 +82,8 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
     // Resources the rapi binds while recording (window backend owns GPU memory; rapi borrows).
     const dk::Shader& GetColorVsh() const;
     const dk::Shader& GetColorFsh() const;
+    const dk::Shader& GetColorTextureVsh() const;
+    const dk::Shader& GetColorTextureFsh() const;
 
     std::uint32_t GetRecordingRing() const;
 
@@ -147,6 +149,8 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
     dk::UniqueMemBlock mShaderCodeMemBlock = {};
     dk::Shader mColorVsh = {};
     dk::Shader mColorFsh = {};
+    dk::Shader mColorTextureVsh = {};
+    dk::Shader mColorTextureFsh = {};
     std::uint32_t mShaderCodeOffset = 0;
 
     // Command region + cmdbuf + fence per swap chain image, cycled each frame; the fence gates reuse so we never

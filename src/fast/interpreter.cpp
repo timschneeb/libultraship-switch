@@ -73,10 +73,12 @@ std::int64_t gOpNs[256] = {};
 std::int64_t gOpCount[256] = {};
 
 struct StepTimer {
-    explicit StepTimer(std::uint8_t opcode) : Opcode(opcode), T0(std::chrono::steady_clock::now()) {}
+    explicit StepTimer(std::uint8_t opcode) : Opcode(opcode), T0(std::chrono::steady_clock::now()) {
+    }
 
     ~StepTimer() {
-        const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - T0).count();
+        const auto ns =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - T0).count();
         gOpNs[Opcode] += ns;
         ++gOpCount[Opcode];
 
@@ -88,7 +90,7 @@ struct StepTimer {
     std::uint8_t Opcode = 0;
     std::chrono::steady_clock::time_point T0 = {};
 };
-}
+} // namespace
 
 namespace Fast {
 
@@ -5067,7 +5069,7 @@ void Interpreter::Run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_r
     const auto loopT1 = std::chrono::steady_clock::now();
     {
         static std::int64_t sLoopNs = 0;
-        static std::int32_t  sFrames = 0;
+        static std::int32_t sFrames = 0;
         sLoopNs += std::chrono::duration_cast<std::chrono::nanoseconds>(loopT1 - loopT0).count();
 
         if (++sFrames >= 60) {
@@ -5077,9 +5079,8 @@ void Interpreter::Run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_r
                 index[k] = k;
             }
 
-            std::partial_sort(index, index + 5, index + 256, [](std::int32_t a, std::int32_t b) {
-                return gOpNs[a] > gOpNs[b];
-            });
+            std::partial_sort(index, index + 5, index + 256,
+                              [](std::int32_t a, std::int32_t b) { return gOpNs[a] > gOpNs[b]; });
 
             std::string top = {};
 
@@ -5089,7 +5090,8 @@ void Interpreter::Run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_r
                     break;
                 }
 
-                top += fmt::format(" opcode=0x{:02X}:{}us/{}calls", opcode, gOpNs[opcode] / 60 / 1000, gOpCount[opcode] / 60);
+                top += fmt::format(" opcode=0x{:02X}:{}us/{}calls", opcode, gOpNs[opcode] / 60 / 1000,
+                                   gOpCount[opcode] / 60);
             }
 
             SPDLOG_CRITICAL("[step-top] loop={}us |{}", sLoopNs / 60 / 1000, top);

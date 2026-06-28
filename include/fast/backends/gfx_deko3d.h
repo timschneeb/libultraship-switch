@@ -12,9 +12,18 @@ namespace Fast {
 struct ShaderProgramDeko3d {
     std::uint64_t ShaderId1 = 0;
     std::uint64_t ShaderId2 = 0;
-    // Drives per-vertex attribute offsets, the variant key, and the combiner uniform.  Mirrors what GfxRenderingAPIOGL
-    // bakes into its per-program table.
     CCFeatures Cc = {};
+};
+
+/**
+ * @brief One sampled texture: the struct own its device-local image and its sampler, keyed by the ID NewTexture()
+ *        hands back.  deko3d has no implicit texture cache, so the image memory lives here for the texture's lifetime.
+ */
+struct TextureDeko3d {
+    dk::UniqueMemBlock ImageMemBlock = {};
+    dk::Image Image = {};
+    std::uint32_t Width = 0;
+    std::uint32_t Height = 0;
 };
 
 class GfxRenderingApiDeko3d final : public GfxRenderingAPI {
@@ -98,27 +107,51 @@ class GfxRenderingApiDeko3d final : public GfxRenderingAPI {
     void SelectTextureFb(int fbId) override;
 
   private:
+    static constexpr std::uint8_t sVtxRing = GfxWindowBackendDeko3d::sFramebuffers;
+    static constexpr std::uint32_t sUniformSlotSize = DK_UNIFORM_BUF_ALIGNMENT; // 0x100
+    static constexpr std::uint32_t sUniformRingSize = 0x40000;
+    static constexpr std::uint32_t sUploadCmdMemSize = 0x1000;
+    static constexpr std::uint32_t sMaxTextures = 1024;
+
     GfxWindowBackendDeko3d* mWindowBackend = nullptr;
     FilteringMode mTextureFilter = FILTER_THREE_POINT;
 
-    static constexpr std::uint8_t sVtxRing = GfxWindowBackendDeko3d::sFramebuffers; // Must be same swap chain depth
-    static constexpr std::uint32_t sUniformSlotSize = DK_UNIFORM_BUF_ALIGNMENT;     // 0x100
-    static constexpr std::uint32_t sUniformRingSize = 0x40000;                      // 256 KiB -> 1024 draws/frame
+    // Texture table, indexed by the ID NewTexture() returns.  SelectTexture only records which ID is bound to which
+    // tile; the GPU image is created in UploadTexture and referenced at draw time.
+    std::vector<TextureDeko3d> mTextures = {};
+    std::int32_t mCurrentTile = 0;
+    std::array<std::int32_t, SHADER_MAX_TEXTURES> mCurrentTextureIds = {};
 
-    // Per-(id0,id1) program pool, mirroring GfxRenderingAPIOGL's contract: LookupShader misses return nullptr so the
-    // interpreter calls CreateAndLoadNewShader, and we decode CCFeatures once.  std::map avoids pulling in a pair
-    // hasher; lookups are already cached in comb->prg[tm].
+    // Transient upload path.  Record a single copyBufferToImage, submit on the borrowed queue, block on waitIdle.
+    // Reused across uploads (clear() before each record), so we don't allocate command memory per texture.
+    dk::CmdBuf mUploadCmdBuf = {};
+    dk::UniqueMemBlock mUploadCmdMemBlock = {};
+
+    // Texture descriptor sets.  deko3d references textures through descriptor tabels, not a stateful bind point: each
+    // texture's image + sampler descriptor live at slot == texture ID, combined per draw into a handle via
+    // dkMakeTextureHandle.  The interprerter recycles texture IDs within TEXTURE_CACHE_MAX_SIZE (1024), so a fixed
+    // 1024-slot pool covers every live texture.
+    dk::UniqueMemBlock mImageDescMemBlock = {};
+    dk::UniqueMemBlock mSamplerDescMemBlock = {};
+    dk::ImageDescriptor* mImageDescriptors = nullptr;     // CPU view into the image descriptor set
+    dk::SamplerDescriptor* mSamplerDescriptors = nullptr; // CPU view into the sampler descriptor set
+    bool mIsDescriptorsDirty = false;                     // A descriptor changed since the last bindTextures
+    std::int32_t mCurrentShaderTextured = -1; // Bound shader variant this frame: -1 none, 0 untextured, 1 textured
+
+    // Per-(id0,id1) program pool: LookupShader misses return nullptr so the interpreter calls CreateAndLoadNewShader,
+    // and we decode CCFeatures once.  std::map avoids pulling in a pair hasher; lookups are already cached in
+    // comb->prg[tm].
     std::map<std::pair<std::uint64_t, std::uint64_t>, ShaderProgramDeko3d> mShaderProgramPool = {};
-    ShaderProgramDeko3d* mCurrentProgram = nullptr; // Set by LoadShader; the batch being drawn
-    dk::CmdBuf mFrameCmdBuf = {};                   // Borrowed frame cmdbuf (set in StartFrame)
-    std::uint32_t mRing = 0;                        // Current ring slot
+    ShaderProgramDeko3d* mCurrentProgram = nullptr;
+    dk::CmdBuf mFrameCmdBuf = {};
+    std::uint32_t mRing = 0;
 
     std::array<dk::UniqueMemBlock, sVtxRing> mUboRingMemBlock = {};
     std::array<DkGpuAddr, sVtxRing> mUboRingGpu = {};
     std::array<std::uint8_t*, sVtxRing> mUboRingCpu = {};
     std::array<std::uint32_t, sVtxRing> mUboRingOffset = {};
 
-    bool mUseAlpha = false; // From SetUseAlpha: selects the vec3/vec4 input stride
+    bool mUseAlpha = false;
     bool mDepthTest = false;
     bool mDepthMask = false;
     bool mDecal = false;
@@ -127,10 +160,6 @@ class GfxRenderingApiDeko3d final : public GfxRenderingAPI {
     std::array<DkGpuAddr, sVtxRing> mVtxRingGpu = {};
     std::array<std::uint8_t*, sVtxRing> mVtxRingCpu = {};
     std::array<std::uint32_t, sVtxRing> mVtxRingOffset = {};
-
-#if defined(DEKO3D_VARIANT_SURVEY)
-    std::set<std::string> mSeenVariants = {};
-#endif
 };
 } // namespace Fast
 #endif
