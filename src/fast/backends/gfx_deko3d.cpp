@@ -14,7 +14,9 @@ struct CombinerUbo {
     std::int32_t OptGrayscale;
     std::int32_t UsedTex0; // 1 -> sample uTex0 (textured variant only); 0 leaves the bound handle unsampled
     std::int32_t UsedTex1;
-    std::int32_t Pad[1]; // Pad to 16-byte multiple (std140 block size)
+    std::int32_t OptTextureEdge;    // Cutout alpha test: a > 0.19 ? 1.0 : discard
+    std::int32_t OptAlphaThreshold; // a < 8/256 ? discard
+    std::int32_t Pad[3];            // Pad to 16-byte multiple (std140 block size)
 };
 
 constexpr std::uint32_t AlignUp(std::uint32_t value, std::uint32_t alignment) {
@@ -332,6 +334,8 @@ void GfxRenderingApiDeko3d::DrawTriangles(float bufVbo[], std::size_t bufVboLen,
     ubo.OptGrayscale = cc.opt_grayscale ? 1 : 0;
     ubo.UsedTex0 = cc.usedTextures[0] ? 1 : 0;
     ubo.UsedTex1 = cc.usedTextures[1] ? 1 : 0;
+    ubo.OptTextureEdge = cc.opt_texture_edge ? 1 : 0;
+    ubo.OptAlphaThreshold = cc.opt_alpha_threshold ? 1 : 0;
 
     const auto uboOff = AlignUp(mUboRingOffset[mRing], DK_UNIFORM_BUF_ALIGNMENT);
     if (uboOff + sUniformSlotSize > sUniformRingSize) {
@@ -381,10 +385,14 @@ void GfxRenderingApiDeko3d::DrawTriangles(float bufVbo[], std::size_t bufVboLen,
         attribs[attribCount++] = { 0, 0, GetFloatOff(tex1Floats), DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 };
     }
 
+    // 4 floats per input when opa_alpha (rgba), else 3 (rgb).  When 3x32, the shader's vec4 input gets a default .a
+    // that the alpha column never reads (it is gated on uOptAlpha), so no reliance on vertex-fetch component defaults.
+    const DkVtxAttribSize inputAttribSize = cc.opt_alpha ? DkVtxAttribSize_4x32 : DkVtxAttribSize_3x32;
+
     for (std::uint32_t i = 0; i < numInputs; ++i) {
         attribs[attribCount++] = {
-            0, 0, GetFloatOff(inputsBase + i * inputWidth), DkVtxAttribSize_3x32, DkVtxAttribType_Float, 0
-        }; // aInputN.rgb
+            0, 0, GetFloatOff(inputsBase + i * inputWidth), inputAttribSize, DkVtxAttribType_Float, 0
+        }; // aInputN
     }
 
     if (!isUntextured) {
