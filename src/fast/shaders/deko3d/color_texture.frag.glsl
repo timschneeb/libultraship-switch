@@ -34,6 +34,10 @@ layout (std140, binding = 0) uniform CombinerUbo {
     int uUsedTex1;
     int uOptTextureEdge;    // Cutout alpha test: a > 0.19 ? 1.0 : discard
     int uOptAlphaThreshold; // a < 8/256 ? discard
+    float uTexClampS0;      // Per-tile sub-texture clamp upper bound (normalized); <0 => axis not clamped
+    float uTexClampT0;
+    float uTexClampS1;
+    float uTexClampT1;
 };
 
 const int SHADER_0 = 0;
@@ -155,9 +159,30 @@ float evalCycleAlpha(ivec4 s, float combined, vec4 t0, vec4 t1) {
 }
 
 void main() {
+    // Sub-texture clamp (per axis, only when the interpreter flagged that tile/axis): clamp the texcoord to
+    // [half-texel, packed bound].  Negative bound => leave it to the sampler wrap mode.
+    vec2 tc0 = vTexCoord0;
+    vec2 tc1 = vTexCoord1;
+
+    if (uTexClampS0 >= 0.0) {
+        tc0.s = clamp(tc0.s, 0.5 / float(textureSize(uTex0, 0).x), uTexClampS0);
+    }
+
+    if (uTexClampT0 >= 0.0) {
+        tc0.t = clamp(tc0.t, 0.5 / float(textureSize(uTex0, 0).y), uTexClampT0);
+    }
+
+    if (uTexClampS1 >= 0.0) {
+        tc1.s = clamp(tc1.s, 0.5 / float(textureSize(uTex1, 0).x), uTexClampS1);
+    }
+
+    if (uTexClampT1 >= 0.0) {
+        tc1.t = clamp(tc1.t, 0.5 / float(textureSize(uTex1, 0).y), uTexClampT1);
+    }
+
     // Sampling is gated on uniform conditions, so it is well-defined even though the unused unit still has a handle.
-    vec4 t0 = uUsedTex0 == 1 ? texture(uTex0, vTexCoord0) : vec4(0.0);
-    vec4 t1 = uUsedTex1 == 1 ? texture(uTex1, vTexCoord1) : vec4(0.0);
+    vec4 t0 = uUsedTex0 == 1 ? texture(uTex0, tc0) : vec4(0.0);
+    vec4 t1 = uUsedTex1 == 1 ? texture(uTex1, tc1) : vec4(0.0);
 
     vec3 cLane = evalCycleColor(uC0Color, vec3(0.0), t0, t1);
     float aLane = uOptAlpha == 1 ? evalCycleAlpha(uC0Alpha, 0.0, t0, t1) : 1.0;

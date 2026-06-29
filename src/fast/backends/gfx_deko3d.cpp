@@ -16,7 +16,11 @@ struct CombinerUbo {
     std::int32_t UsedTex1;
     std::int32_t OptTextureEdge;    // Cutout alpha test: a > 0.19 ? 1.0 : discard
     std::int32_t OptAlphaThreshold; // a < 8/256 ? discard
-    std::int32_t Pad[3];            // Pad to 16-byte multiple (std140 block size)
+    float TexClampS0;               // Per-tile sub-texture clamp upper bound (normalized); < 0 => axis not clamped
+    float TexClampT0;
+    float TexClampS1;
+    float TexClampT1;
+    std::int32_t Pad[3]; // Pad to 128 bytes
 };
 
 constexpr std::uint32_t AlignUp(std::uint32_t value, std::uint32_t alignment) {
@@ -347,6 +351,13 @@ void GfxRenderingApiDeko3d::DrawTriangles(float bufVbo[], std::size_t bufVboLen,
     ubo.UsedTex1 = cc.usedTextures[1] ? 1 : 0;
     ubo.OptTextureEdge = cc.opt_texture_edge ? 1 : 0;
     ubo.OptAlphaThreshold = cc.opt_alpha_threshold ? 1 : 0;
+
+    // Sub-texture clamp bounds, read from vertex 0.  Negative => the axis is not clamped, so the shader leaves it to
+    // the sampler wrap mode.
+    ubo.TexClampS0 = cc.usedTextures[0] && cc.clamp[0][0] ? bufVbo[tex0Floats + 2] : -1.0f;
+    ubo.TexClampT0 = cc.usedTextures[0] && cc.clamp[0][1] ? bufVbo[tex0Floats + 2 + (cc.clamp[0][0] ? 1 : 0)] : -1.0f;
+    ubo.TexClampS1 = cc.usedTextures[1] && cc.clamp[1][0] ? bufVbo[tex1Floats + 2] : -1.0f;
+    ubo.TexClampT1 = cc.usedTextures[1] && cc.clamp[1][1] ? bufVbo[tex1Floats + 2 + (cc.clamp[1][0] ? 1 : 0)] : -1.0f;
 
     const auto uboOff = AlignUp(mUboRingOffset[mRing], DK_UNIFORM_BUF_ALIGNMENT);
     if (uboOff + sUniformSlotSize > sUniformRingSize) {
