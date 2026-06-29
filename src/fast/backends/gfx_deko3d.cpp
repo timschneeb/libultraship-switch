@@ -325,6 +325,13 @@ void GfxRenderingApiDeko3d::DrawTriangles(float bufVbo[], std::size_t bufVboLen,
     // RT0 enable bit varies, driven by SetUseAlpha.
     cb.bindColorState(dk::ColorState{}.setBlendEnable(0, mUseAlpha));
 
+    // Decal surfaces (paths, shadows) are coplanar with the ground.  LEQUAL above lets them pass the depth test;
+    // a small negative depth bias pushes them toward the player so they composite on instead of z-fighting.
+    cb.bindRasterizerState(dk::RasterizerState{}.setCullMode(DkFace_None).setDepthBiasEnable(mDecal));
+    if (mDecal) {
+        cb.setDepthBias(-2.0f, 0.0f, -2.0f);
+    }
+
     // ----------------------------------------------------------------------------------------------------------------
     // Combiner uniform
     // ----------------------------------------------------------------------------------------------------------------
@@ -487,7 +494,6 @@ void GfxRenderingApiDeko3d::StartFrame() {
     cb.bindImageDescriptorSet(mImageDescMemBlock.getGpuAddr(), sMaxTextures);
     cb.bindSamplerDescriptorSet(mSamplerDescMemBlock.getGpuAddr(), sMaxTextures);
     mCurrentShaderTextured = -1; // Force the first draw to bind its shader variant
-    cb.bindRasterizerState(dk::RasterizerState{}.setCullMode(DkFace_None));
     cb.bindColorState(dk::ColorState{});
     cb.bindColorWriteState(dk::ColorWriteState{});
 
