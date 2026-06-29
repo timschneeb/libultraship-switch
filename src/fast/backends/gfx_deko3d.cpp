@@ -489,6 +489,7 @@ void GfxRenderingApiDeko3d::StartFrame() {
     mCurrentShaderTextured = -1; // Force the first draw to bind its shader variant
     cb.bindRasterizerState(dk::RasterizerState{}.setCullMode(DkFace_None));
     cb.bindColorState(dk::ColorState{});
+    cb.bindColorWriteState(dk::ColorWriteState{});
 
     // Fixed blend equation for the frame: standard over-blend.  Whether it is applied is the ColorState blend-enable
     // bit, set per draw in DrawTriangles from mUseAlpha.  bindBlendStates encodes the state into the command stream,
