@@ -321,6 +321,10 @@ void GfxRenderingApiDeko3d::DrawTriangles(float bufVbo[], std::size_t bufVboLen,
             .setDepthWriteEnable(mDepthMask)
             .setDepthCompareOp(mDepthTest ? (mDecal ? DkCompareOp_Lequal : DkCompareOp_Less) : DkCompareOp_Always));
 
+    // Per-draw blend enable.  The blend equation/factors are fixed (over-blend, bound once in StartFrame); only the
+    // RT0 enable bit varies, driven by SetUseAlpha.
+    cb.bindColorState(dk::ColorState{}.setBlendEnable(0, mUseAlpha));
+
     // ----------------------------------------------------------------------------------------------------------------
     // Combiner uniform
     // ----------------------------------------------------------------------------------------------------------------
@@ -359,8 +363,7 @@ void GfxRenderingApiDeko3d::DrawTriangles(float bufVbo[], std::size_t bufVboLen,
     // tex0-only/tex1-only/both.
     // ----------------------------------------------------------------------------------------------------------------
 
-    const std::int32_t isTextured = isUntextured ? 0 : 1;
-    if (mCurrentShaderTextured != isTextured) {
+    if (const std::int32_t isTextured = isUntextured ? 0 : 1; mCurrentShaderTextured != isTextured) {
         if (isTextured) {
             cb.bindShaders(DkStageFlag_GraphicsMask,
                            { &mWindowBackend->GetColorTextureVsh(), &mWindowBackend->GetColorTextureFsh() });
@@ -385,7 +388,7 @@ void GfxRenderingApiDeko3d::DrawTriangles(float bufVbo[], std::size_t bufVboLen,
         attribs[attribCount++] = { 0, 0, GetFloatOff(tex1Floats), DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 };
     }
 
-    // 4 floats per input when opa_alpha (rgba), else 3 (rgb).  When 3x32, the shader's vec4 input gets a default .a
+    // 4 floats per input when opt_alpha (rgba), else 3 (rgb).  When 3x32, the shader's vec4 input gets a default .a
     // that the alpha column never reads (it is gated on uOptAlpha), so no reliance on vertex-fetch component defaults.
     const DkVtxAttribSize inputAttribSize = cc.opt_alpha ? DkVtxAttribSize_4x32 : DkVtxAttribSize_3x32;
 
@@ -409,7 +412,7 @@ void GfxRenderingApiDeko3d::DrawTriangles(float bufVbo[], std::size_t bufVboLen,
         const std::uint32_t id1 = cc.usedTextures[1] ? mCurrentTextureIds[1] : anyId;
         const DkResHandle handles[2] = { dkMakeTextureHandle(id0, id0), dkMakeTextureHandle(id1, id1) };
 
-        cb.bindTextures(DkStage_Fragment, 0, dk::detail::ArrayProxy<const DkResHandle>(2, handles));
+        cb.bindTextures(DkStage_Fragment, 0, dk::detail::ArrayProxy(2, handles));
     }
 
     cb.bindVtxAttribState(dk::detail::ArrayProxy<const DkVtxAttribState>(attribCount, attribs.data()));
@@ -419,7 +422,7 @@ void GfxRenderingApiDeko3d::DrawTriangles(float bufVbo[], std::size_t bufVboLen,
 
     ++gDrawCalls;
     gDrawNs += NowNs() - drawT0;
-} // namespace Fast
+}
 
 // --------------------------------------------------------------------------------------------------------------------
 // Frame lifecycle
@@ -486,7 +489,18 @@ void GfxRenderingApiDeko3d::StartFrame() {
     mCurrentShaderTextured = -1; // Force the first draw to bind its shader variant
     cb.bindRasterizerState(dk::RasterizerState{}.setCullMode(DkFace_None));
     cb.bindColorState(dk::ColorState{});
-    cb.bindColorWriteState(dk::ColorWriteState{});
+
+    // Fixed blend equation for the frame: standard over-blend.  Whether it is applied is the ColorState blend-enable
+    // bit, set per draw in DrawTriangles from mUseAlpha.  bindBlendStates encodes the state into the command stream,
+    // so the local is safe to let go.
+    dk::BlendState blendState = {};
+    blendState.setColorBlendOp(DkBlendOp_Add)
+        .setSrcColorBlendFactor(DkBlendFactor_SrcAlpha)
+        .setDstColorBlendFactor(DkBlendFactor_InvSrcAlpha)
+        .setAlphaBlendOp(DkBlendOp_Add)
+        .setSrcAlphaBlendFactor(DkBlendFactor_SrcAlpha)
+        .setDstAlphaBlendFactor(DkBlendFactor_InvSrcAlpha);
+    cb.bindBlendStates(0, dk::detail::ArrayProxy<const DkBlendState>(1, &blendState));
 }
 
 void GfxRenderingApiDeko3d::EndFrame() {
