@@ -24,6 +24,8 @@ struct TextureDeko3d {
     dk::Image Image = {};
     std::uint32_t Width = 0;
     std::uint32_t Height = 0;
+    std::uint32_t SamplerIndex = 8; // Slot in the immutable sampler table; 8 == (nearest, Repeat, Repeat), the
+                                    // interpreter's cache-insert defaults.
 };
 
 class GfxRenderingApiDeko3d final : public GfxRenderingAPI {
@@ -112,6 +114,7 @@ class GfxRenderingApiDeko3d final : public GfxRenderingAPI {
     static constexpr std::uint32_t sUniformRingSize = 0x40000;
     static constexpr std::uint32_t sUploadCmdMemSize = 0x1000;
     static constexpr std::uint32_t sMaxTextures = 1024;
+    static constexpr std::uint32_t sSamplerCount = 18; // 2 filters x 3 wrapS x 3 wrapT immutable samplers
 
     GfxWindowBackendDeko3d* mWindowBackend = nullptr;
     FilteringMode mTextureFilter = FILTER_THREE_POINT;
@@ -127,9 +130,9 @@ class GfxRenderingApiDeko3d final : public GfxRenderingAPI {
     dk::CmdBuf mUploadCmdBuf = {};
     dk::UniqueMemBlock mUploadCmdMemBlock = {};
 
-    // Texture descriptor sets.  deko3d references textures through descriptor tabels, not a stateful bind point: each
+    // Texture descriptor sets.  deko3d references textures through descriptor tables, not a stateful bind point: each
     // texture's image + sampler descriptor live at slot == texture ID, combined per draw into a handle via
-    // dkMakeTextureHandle.  The interprerter recycles texture IDs within TEXTURE_CACHE_MAX_SIZE (1024), so a fixed
+    // dkMakeTextureHandle.  The interpreter recycles texture IDs within TEXTURE_CACHE_MAX_SIZE (1024), so a fixed
     // 1024-slot pool covers every live texture.
     dk::UniqueMemBlock mImageDescMemBlock = {};
     dk::UniqueMemBlock mSamplerDescMemBlock = {};

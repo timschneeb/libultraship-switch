@@ -27,13 +27,22 @@ constexpr std::uint32_t AlignUp(std::uint32_t value, std::uint32_t alignment) {
     return value + alignment - 1 & ~(alignment - 1);
 }
 
-// N64 tile clamp/mirror bits -> deko3d wrap mode.  CLAMP wins over MIRROR.
-constexpr DkWrapMode CmToDeko3d(std::uint32_t value) {
+// N64 tile clamp/mirror bits -> index into the static wrap-mode table.  CLAMP wins over MIRROR.
+constexpr std::uint32_t CmToWrapIndex(std::uint32_t value) {
     if (value & G_TX_CLAMP) {
-        return DkWrapMode_ClampToEdge;
+        return 0;
     }
 
-    return value & G_TX_MIRROR ? DkWrapMode_MirroredRepeat : DkWrapMode_Repeat;
+    return value & G_TX_MIRROR ? 1 : 2;
+}
+
+constexpr DkWrapMode gWrapModes[3] = { DkWrapMode_ClampToEdge, DkWrapMode_MirroredRepeat, DkWrapMode_Repeat };
+
+// Slot of the immutable sampler descriptor for (filter, cms, cmt).  2 filters x 3 wrapS x 3 wrapT = 18 slots, written
+// once in Init and never mutated, so draws capture sampler state by value (Metal's immutable MTLSamplerState model)
+// instead of racing a shared mutable slot.
+constexpr std::uint32_t SamplerIndex(bool linearFilter, std::uint32_t cms, std::uint32_t cmt) {
+    return (linearFilter ? 9u : 0u) + CmToWrapIndex(cms) * 3u + CmToWrapIndex(cmt);
 }
 
 // -----------
@@ -181,16 +190,16 @@ void GfxRenderingApiDeko3d::UploadTexture(const std::uint8_t* rgba32Buf, std::ui
 }
 
 void GfxRenderingApiDeko3d::SetSamplerParameters(int sampler, bool linearFilter, std::uint32_t cms, std::uint32_t cmt) {
-    // Sampler is baked per-texture, at descriptor slot == texture ID bound to this tile.  Called twice per texture
-    // (defaults, then real values); last write wins.  Three-point filtering is deferred -> nearest/linear only.
-    const auto filter = linearFilter ? DkFilter_Linear : DkFilter_Nearest;
-    dk::Sampler s = {};
+    // Sampler state is captured by value: resolve to one of the 18 immutable descriptors and remember the index on
+    // the texture.  DrawTriangles bakes it into the handle at record time, so the twice-per-texture call pattern
+    // (defaults, then real values) and mid-frame param changes can no longer rewrite state under recorded or in-flight
+    // draws.  Three-point filtering is deferred -> nearest/linear only.
+    const auto id = static_cast<std::uint32_t>(mCurrentTextureIds[sampler]);
+    if (id >= mTextures.size()) {
+        return; // No texture selected on this tile yet; nothing to attach the sampler to.
+    }
 
-    s.setFilter(filter, filter);
-    s.setWrapMode(CmToDeko3d(cms), CmToDeko3d(cmt), DkWrapMode_Repeat);
-
-    mSamplerDescriptors[mCurrentTextureIds[sampler]].initialize(s);
-    mIsDescriptorsDirty = true;
+    mTextures[id].SamplerIndex = SamplerIndex(linearFilter, cms, cmt);
 }
 
 void GfxRenderingApiDeko3d::DeleteTexture(std::uint32_t texId) {
@@ -417,9 +426,10 @@ void GfxRenderingApiDeko3d::DrawTriangles(float bufVbo[], std::size_t bufVboLen,
     }
 
     if (!isUntextured) {
-        // Reference each texture by its descriptor slot (== ID).  The unused unit gets a valid handle (the used ID),
-        // so the shader always has a bound texture even though uUsedTexN gates sampling.  Invalidate the descriptor
-        // cache once if any descriptor was written since the last bind.
+        // Reference each texture by its image descriptor slot (== ID) paired with its immutable sampler slot.  The
+        // unused unit gets a valid handle (the used ID), so the shader always has a bound texture even though
+        // uUsedTexN gates sampling.  Invalidate the descriptor cache once if any image descriptor was written since
+        // the last bind (samplers are write-once at Init and never dirty).
         if (mIsDescriptorsDirty) {
             cb.barrier(DkBarrier_None, DkInvalidateFlags_Descriptors | DkInvalidateFlags_Image);
             mIsDescriptorsDirty = false;
@@ -428,7 +438,8 @@ void GfxRenderingApiDeko3d::DrawTriangles(float bufVbo[], std::size_t bufVboLen,
         const std::uint32_t anyId = cc.usedTextures[0] ? mCurrentTextureIds[0] : mCurrentTextureIds[1];
         const std::uint32_t id0 = cc.usedTextures[0] ? mCurrentTextureIds[0] : anyId;
         const std::uint32_t id1 = cc.usedTextures[1] ? mCurrentTextureIds[1] : anyId;
-        const DkResHandle handles[2] = { dkMakeTextureHandle(id0, id0), dkMakeTextureHandle(id1, id1) };
+        const DkResHandle handles[2] = { dkMakeTextureHandle(id0, mTextures[id0].SamplerIndex),
+                                         dkMakeTextureHandle(id1, mTextures[id1].SamplerIndex) };
 
         cb.bindTextures(DkStage_Fragment, 0, dk::detail::ArrayProxy(2, handles));
     }
@@ -483,11 +494,29 @@ void GfxRenderingApiDeko3d::Init() {
     mImageDescriptors = static_cast<dk::ImageDescriptor*>(mImageDescMemBlock.getCpuAddr());
 
     constexpr auto smpSetSize =
-        AlignUp(sMaxTextures * static_cast<std::uint32_t>(sizeof(dk::SamplerDescriptor)), DK_MEMBLOCK_ALIGNMENT);
+        AlignUp(sSamplerCount * static_cast<std::uint32_t>(sizeof(dk::SamplerDescriptor)), DK_MEMBLOCK_ALIGNMENT);
     mSamplerDescMemBlock = dk::MemBlockMaker{ device, smpSetSize }
                                .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
                                .create();
     mSamplerDescriptors = static_cast<dk::SamplerDescriptor*>(mSamplerDescMemBlock.getCpuAddr());
+
+    // Immutable sampler table: slot layout mirrors SamplerIndex().  Written once here, never touched again.
+    for (std::uint32_t f = 0; f < 2; ++f) {
+        for (std::uint32_t s = 0; s < 3; ++s) {
+            for (std::uint32_t t = 0; t < 3; ++t) {
+                const auto filter = f != 0 ? DkFilter_Linear : DkFilter_Nearest;
+                dk::Sampler smp = {};
+
+                smp.setFilter(filter, filter);
+                smp.setWrapMode(gWrapModes[s], gWrapModes[t], DkWrapMode_Repeat);
+                mSamplerDescriptors[f * 9 + s * 3 + t].initialize(smp);
+            }
+        }
+    }
+
+    // The table is written before any frame is recorded, but force one descriptor-cache invalidate on the first
+    // textured draw regardless of upload order.
+    mIsDescriptorsDirty = true;
 }
 
 void GfxRenderingApiDeko3d::OnResize() {
@@ -503,7 +532,7 @@ void GfxRenderingApiDeko3d::StartFrame() {
 
     // Bind the texture descriptor sets for the frame; individual textures are referenced per draw via bindTextures.
     cb.bindImageDescriptorSet(mImageDescMemBlock.getGpuAddr(), sMaxTextures);
-    cb.bindSamplerDescriptorSet(mSamplerDescMemBlock.getGpuAddr(), sMaxTextures);
+    cb.bindSamplerDescriptorSet(mSamplerDescMemBlock.getGpuAddr(), sSamplerCount);
     mCurrentShaderTextured = -1; // Force the first draw to bind its shader variant
     cb.bindColorState(dk::ColorState{});
     cb.bindColorWriteState(dk::ColorWriteState{});
