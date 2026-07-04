@@ -147,14 +147,34 @@ void GfxRenderingApiDeko3d::UploadTexture(const std::uint8_t* rgba32Buf, std::ui
 
     const auto device = mWindowBackend->GetDevice();
     auto queue = mWindowBackend->GetQueue();
-    auto& texture = mTextures[mCurrentTextureIds[mCurrentTile]];
+    const auto texId = static_cast<std::uint32_t>(mCurrentTextureIds[mCurrentTile]);
+    auto& texture = mTextures[texId];
 
     // (Re)create the device-local sampled image when absent or resized.  setFlags(0): block-linear, sampled, no
     // UsageRenderer/no HwCompression.
     if (!texture.ImageMemBlock || texture.Width != width || texture.Height != height) {
+        // Related: https://github.com/devkitPro/deko3d/issues/10
+        // For block-linear images whose base height is 6..8, dkImageLayoutGetSize() demotes the auto-picked tile
+        // height (TwoGobs -> OneGob) when sizing the base level, but the copy engine (ImageInfo::fromImageView, mip 0
+        // skips the demotion) and the TIC are programmed with the undemoted value -- so the hardware walks one
+        // GOB-column stride (1024B) past the reported size.  With one tight memblock per image that overhang is
+        // unmapped: uploads silently drop every texel with x >= 64 and reads return 0xFF.  Pick the tile height
+        // ourselves, replicating deko3d's pick and its base-level demotion, so size math and hardware programming
+        // agree by construction.  Safe here because our images are always mipLevels == 1.
+        const std::uint32_t heightAndHalfGobs = (height + height / 2u + 7u) / 8u;
+        std::uint32_t tileH = heightAndHalfGobs >= 16u  ? 4u
+                              : heightAndHalfGobs >= 8u ? 3u
+                              : heightAndHalfGobs >= 4u ? 2u
+                              : heightAndHalfGobs >= 2u ? 1u
+                                                        : 0u;
+        while (tileH != 0 && 8u << tileH - 1u >= height) {
+            --tileH;
+        }
+
         dk::ImageLayout layout = {};
         dk::ImageLayoutMaker{ device }
-            .setFlags(0)
+            .setFlags(DkImageFlags_CustomTileSize)
+            .setTileSize(static_cast<DkTileSize>(tileH))
             .setFormat(DkImageFormat_RGBA8_Unorm)
             .setDimensions(width, height)
             .initialize(layout);
@@ -185,7 +205,7 @@ void GfxRenderingApiDeko3d::UploadTexture(const std::uint8_t* rgba32Buf, std::ui
 
     // Point this texture's descriptor slot at the (possibly newly recreated image).  Slot == texture id.  Sampled by
     // dkMakeTextureHandle(id, id) at draw time; the dirty flag forces a descriptor-cache invalidate before that draw.
-    mImageDescriptors[mCurrentTextureIds[mCurrentTile]].initialize(dk::ImageView{ texture.Image });
+    mImageDescriptors[texId].initialize(dk::ImageView{ texture.Image });
     mIsDescriptorsDirty = true;
 }
 

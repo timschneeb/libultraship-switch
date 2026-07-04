@@ -1,12 +1,12 @@
 #pragma once
 
 #if defined(ENABLE_DEKO3D)
+#include <map>
+#include <utility>
+
 #include "gfx_rendering_api.h"
 #include "gfx_deko3d_window.h"
 #include "fast/interpreter.h"
-
-#include <map>
-#include <utility>
 
 namespace Fast {
 struct ShaderProgramDeko3d {
