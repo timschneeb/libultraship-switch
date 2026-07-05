@@ -13,7 +13,6 @@
 namespace Fast {
 
 namespace {
-constexpr std::uint32_t gCmdMemSize = 0x10000;        // 64 KiB
 constexpr std::uint32_t gShaderCodeMemSize = 0x20000; // 128 KiB
 constexpr std::uint32_t gFrameCmdMemSize = 0x400000;  // 4 MiB per slot
 
@@ -87,12 +86,6 @@ void GfxWindowBackendDeko3d::CreateDeko3dDevice() {
     mDevice = dk::DeviceMaker{}.setCbDebug(Deko3dDebugCallback).create();
     mQueue = dk::QueueMaker{ mDevice }.setFlags(DkQueueFlags_Graphics).create();
 
-    mCmdMemBlock = dk::MemBlockMaker{ mDevice, AlignUp(gCmdMemSize, DK_MEMBLOCK_ALIGNMENT) }
-                       .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
-                       .create();
-    mCmdBuf = dk::CmdBufMaker{ mDevice }.create();
-    mCmdBuf.addMemory(mCmdMemBlock, 0, gCmdMemSize);
-
     // GPU code memory for the tracer shaders.  Code memblocks reserve DK_SHADER_CODE_UNUSABLE_SIZE at the start, so we
     // begin allocating at the first DK_SHADER_CODE_ALIGNMENT boundary past it.
     mShaderCodeMemBlock = dk::MemBlockMaker{ mDevice, AlignUp(gShaderCodeMemSize, DK_MEMBLOCK_ALIGNMENT) }
@@ -160,26 +153,6 @@ void GfxWindowBackendDeko3d::CreateSwapChain(std::uint32_t width, std::uint32_t 
     }
 
     mSwapChain = dk::SwapchainMaker{ mDevice, nwindowGetDefault(), swapChainImages }.create();
-
-    RecordClearCommandLists();
-}
-
-void GfxWindowBackendDeko3d::RecordClearCommandLists() {
-    mCmdBuf.clear();
-
-    for (std::uint8_t i = 0; i < sFramebuffers; ++i) {
-        dk::ImageView colorView{ mFramebuffers[i] };
-        dk::ImageView depthView{ mDepthBuffers[i] };
-
-        mCmdBuf.bindRenderTargets({ &colorView }, &depthView);
-        mCmdBuf.setViewports(0,
-                             { { 0.0f, 0.0f, static_cast<float>(mWidth), static_cast<float>(mHeight), 0.0f, 1.0f } });
-        mCmdBuf.setScissors(0, { { 0, 0, mWidth, mHeight } });
-        mCmdBuf.clearColor(0, DkColorMask_RGBA, 1.0f, 0.0f, 1.0f, 1.0f);
-        mCmdBuf.clearDepthStencil(true, 1.0f, 0xFF, 0); // far = 1.0 in 0..1 depth
-
-        mClearCmdLists[i] = mCmdBuf.finishList();
-    }
 }
 
 bool GfxWindowBackendDeko3d::LoadDeko3dShader(dk::Shader& shader, const char* path) {
@@ -261,7 +234,6 @@ void GfxWindowBackendDeko3d::DestroySwapChain() {
     mSwapChain = nullptr;
     mFbMemBlock = nullptr;
     mDepthMemBlock = nullptr;
-    mClearCmdLists = {};
 }
 
 void GfxWindowBackendDeko3d::Init(const char* gameName, const char* apiName, bool startFullScreen, std::uint32_t width,
@@ -276,11 +248,12 @@ void GfxWindowBackendDeko3d::Init(const char* gameName, const char* apiName, boo
     mWidth = width ? width : 1280;
     mHeight = height ? height : 720;
 
-    Deko3dTrace("Init: creating device/queue/cmdbuf");
+    Deko3dTrace("Init: creating device/queue");
     CreateDeko3dDevice();
 
-    // SoH normally doesn't mount the nro's embedded romfs, so do it here for the .dksh blobs.  Load before
-    // CreateSwapChain() because RecordClearCommandLists() bind these shaders.
+    // SoH normally doesn't mount the nro's embedded romfs, so do it here for the .dksh blobs.  The shaders only need
+    // to be resident before the first recorded frame binds them (rapi StartFrame); their position relative to
+    // CreateSwapChain() is not otherwise significant.
     if (R_FAILED(romfsInit())) {
         Deko3dTrace("Init: romfsInit failed (no embedded romfs?)");
     }
@@ -299,6 +272,14 @@ void GfxWindowBackendDeko3d::Init(const char* gameName, const char* apiName, boo
 
     if (!LoadDeko3dShader(mColorTextureFsh, "romfs:/shaders/color_texture.frag.dksh")) {
         Deko3dTrace("Init: color_texture fsh load failed");
+    }
+
+    if (!LoadDeko3dShader(mImGuiVsh, "romfs:/shaders/imgui.vert.dksh")) {
+        Deko3dTrace("Init: imgui vsh load failed");
+    }
+
+    if (!LoadDeko3dShader(mImGuiFsh, "romfs:/shaders/imgui.frag.dksh")) {
+        Deko3dTrace("Init: imgui fsh load failed");
     }
 
     Deko3dTrace("Init: creating swap chain");
@@ -323,19 +304,12 @@ void GfxWindowBackendDeko3d::SwapBuffersBegin() {
 
     gDbgRecord += NowNs() - gDbgRecordStart;
 
-    const auto a0 = NowNs();
-    mCurrentSlot = mQueue.acquireImage(mSwapChain);
+    // Image already acquired in BeginFrameRecording. The recorded frame list now opens with the fb-0 render-target
+    // bind + clear (emitted inline by the rapi's StartFrame), so there is no separate pre-recorded clear list.
     const auto a1 = NowNs();
-    gDbgAcquire += a1 - a0;
-
-    if (a1 - a0 > gDbgAcquireMax) {
-        gDbgAcquireMax = a1 - a0;
-    }
-
-    mQueue.submitCommands(mClearCmdLists[mCurrentSlot]); // RT + viewport + scissor + clear
 
     if (mHasFrameDrawList) {
-        mQueue.submitCommands(mFrameDrawList); // rapi's draws, inheriting the bound state
+        mQueue.submitCommands(mFrameDrawList);
     }
 
     mQueue.signalFence(mFrameFence[mRecordingRing]); // Signals after the draws complete
@@ -391,8 +365,6 @@ void GfxWindowBackendDeko3d::Destroy() {
         mFrameCmdMemBlock[i] = nullptr;
     }
 
-    mCmdBuf = nullptr;
-    mCmdMemBlock = nullptr;
     mShaderCodeMemBlock = nullptr;
     mQueue = nullptr;
     mDevice = nullptr;
@@ -509,6 +481,23 @@ bool GfxWindowBackendDeko3d::IsFullscreen() {
 dk::CmdBuf GfxWindowBackendDeko3d::BeginFrameRecording() {
     mRecordingRing = mFrameIndex % sFramebuffers;
 
+    // The rapi must bind fb 0's real image as a render target while recording (to rebind it after drawing to an
+    // offscreen FB, and to let ImGui target the backbuffer).  acquireImage blocks until the slot's previous present
+    // completes; with double buffering it is normally already free, so the added latency is ~0.
+    const auto acq0 = NowNs();
+    if (mCurrentSlot == -1) {
+        mCurrentSlot = mQueue.acquireImage(mSwapChain);
+    } else {
+        Deko3dTrace("BeginFrameRecording: swap chain image held without a matching present");
+    }
+
+    const auto acq1 = NowNs();
+    gDbgAcquire += acq1 - acq0;
+
+    if (acq1 - acq0 > gDbgAcquireMax) {
+        gDbgAcquireMax = acq1 - acq0;
+    }
+
     const auto t0 = NowNs();
 
     if (mIsFrameFenceValid[mRecordingRing]) {
@@ -546,6 +535,10 @@ const dk::Image& GfxWindowBackendDeko3d::GetFramebuffer(int slot) const {
     return mFramebuffers[slot];
 }
 
+const dk::Image& GfxWindowBackendDeko3d::GetDepthBuffer(int slot) const {
+    return mDepthBuffers[slot];
+}
+
 int GfxWindowBackendDeko3d::GetCurrentImageSlot() const {
     return mCurrentSlot;
 }
@@ -564,6 +557,14 @@ const dk::Shader& GfxWindowBackendDeko3d::GetColorTextureVsh() const {
 
 const dk::Shader& GfxWindowBackendDeko3d::GetColorTextureFsh() const {
     return mColorTextureFsh;
+}
+
+const dk::Shader& GfxWindowBackendDeko3d::GetImGuiVsh() const {
+    return mImGuiVsh;
+}
+
+const dk::Shader& GfxWindowBackendDeko3d::GetImGuiFsh() const {
+    return mImGuiFsh;
 }
 
 std::uint32_t GfxWindowBackendDeko3d::GetRecordingRing() const {

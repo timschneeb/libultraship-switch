@@ -75,6 +75,9 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
     dk::Queue GetQueue() const;
 
     const dk::Image& GetFramebuffer(int slot) const;
+    // Depth image paired with the color image at the same swapchain slot. Indexed by the acquired slot, NOT the
+    // command-memory ring: acquireImage does not guarantee round-robin, so the two indices may diverge.
+    const dk::Image& GetDepthBuffer(int slot) const;
     // Slot acquired for the current frame, or -1 between frames. The rendering API binds this framebuffer as its
     // render target.
     int GetCurrentImageSlot() const;
@@ -84,6 +87,8 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
     const dk::Shader& GetColorFsh() const;
     const dk::Shader& GetColorTextureVsh() const;
     const dk::Shader& GetColorTextureFsh() const;
+    const dk::Shader& GetImGuiVsh() const;
+    const dk::Shader& GetImGuiFsh() const;
 
     std::uint32_t GetRecordingRing() const;
 
@@ -119,7 +124,6 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
     void CreateDeko3dDevice();
     void CreateSwapChain(std::uint32_t width, std::uint32_t height);
     void DestroySwapChain();
-    void RecordClearCommandLists();
     // Load a single-stage .dksh from romfs into the shared shader code memblock.  Removed with the rest of the
     // scaffolding once GfxRenderingApiDeko3d records real draws.
     bool LoadDeko3dShader(dk::Shader& shader, const char* path);
@@ -140,17 +144,14 @@ class GfxWindowBackendDeko3d final : public GfxWindowBackend {
 
     std::int32_t mCurrentSlot = -1;
 
-    // Command memory + a cmdbuf holding the pre-recorded per-slot clear lists.
-    dk::UniqueMemBlock mCmdMemBlock = {};
-    dk::UniqueCmdBuf mCmdBuf = {};
-    std::array<DkCmdList, sFramebuffers> mClearCmdLists = {};
-
     // Shader code memory + the two vertex color shaders, plus a static vertex buffer feeding their attributes.
     dk::UniqueMemBlock mShaderCodeMemBlock = {};
     dk::Shader mColorVsh = {};
     dk::Shader mColorFsh = {};
     dk::Shader mColorTextureVsh = {};
     dk::Shader mColorTextureFsh = {};
+    dk::Shader mImGuiVsh = {};
+    dk::Shader mImGuiFsh = {};
     std::uint32_t mShaderCodeOffset = 0;
 
     // Command region + cmdbuf + fence per swap chain image, cycled each frame; the fence gates reuse so we never

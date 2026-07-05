@@ -8,6 +8,8 @@
 #include "gfx_deko3d_window.h"
 #include "fast/interpreter.h"
 
+struct ImDrawData; // ImGui draw payload; full type pulled into the .cpp only (keeps imgui.h out of this header).
+
 namespace Fast {
 struct ShaderProgramDeko3d {
     std::uint64_t ShaderId1 = 0;
@@ -78,6 +80,20 @@ class GfxRenderingApiDeko3d final : public GfxRenderingAPI {
     // ----------------------------------------------------------------------------------------------------------------
 
     void DrawTriangles(float bufVbo[], std::size_t bufVboLen, std::size_t bufVboNumTris) override;
+
+    // ----------------------------------------------------------------------------------------------------------------
+    // ImGui renderer
+    //
+    // Not part of GfxRenderingAPI; called via a concrete cast from Fast3dGui.  Draws are appended to the same frame
+    // command buffer as the game, after game draws, targeting fb 0 -- so ImGui composes the final backbuffer.
+    // ----------------------------------------------------------------------------------------------------------------
+
+    void RenderDrawData(ImDrawData* drawData);
+    // (Re)builds the ImGui font atlas into a reserved rapi texture slot.  Deferred to NewFrame (never Init): the
+    // Fast3dGui::Init handshake fires inside the window backend's Init, before rapi Init(), so the descriptor sets this
+    // touches don't exist yet at that point.  Idempotent -- re-uploads only when SoH has dirtied the atlas by adding
+    // fonts after Gui::Init().
+    void EnsureImGuiFontsUploaded();
 
     // ----------------------------------------------------------------------------------------------------------------
     // Frame lifecycle
@@ -163,6 +179,14 @@ class GfxRenderingApiDeko3d final : public GfxRenderingAPI {
     std::array<DkGpuAddr, sVtxRing> mVtxRingGpu = {};
     std::array<std::uint8_t*, sVtxRing> mVtxRingCpu = {};
     std::array<std::uint32_t, sVtxRing> mVtxRingOffset = {};
+
+    // ImGui vertex/index streaming, per ring.  Indexed by mRing, whose command memory is gated by the frame fence in
+    // BeginFrameRecording, so overwriting slot mRing here can't race an in-flight frame.  Grow-only; created lazily on
+    // first use and resized (never shrunk) when a frame's draw data exceeds the current capacity.  The ortho UBO
+    // reuses the fragment CombinerUbo ring.
+    std::array<dk::UniqueMemBlock, sVtxRing> mImGuiVtxMemBlock = {};
+    std::array<dk::UniqueMemBlock, sVtxRing> mImGuiIdxMemBlock = {};
+    std::int32_t mImguiFontTexId = -1; // Reserved slot in mTextures for the font atlas (== its descriptor slot)
 };
 } // namespace Fast
 #endif

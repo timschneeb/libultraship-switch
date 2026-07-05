@@ -2,6 +2,8 @@
 #include "fast/backends/gfx_deko3d.h"
 #include "fast/interpreter.h"
 
+#include <imgui.h>
+
 namespace {
 constexpr std::uint32_t gVtxRingSize = 0x800000; // 8 MiB per slot
 
@@ -156,25 +158,26 @@ void GfxRenderingApiDeko3d::UploadTexture(const std::uint8_t* rgba32Buf, std::ui
         // Related: https://github.com/devkitPro/deko3d/issues/10
         // For block-linear images whose base height is 6..8, dkImageLayoutGetSize() demotes the auto-picked tile
         // height (TwoGobs -> OneGob) when sizing the base level, but the copy engine (ImageInfo::fromImageView, mip 0
-        // skips the demotion) and the TIC are programmed with the undemoted value -- so the hardware walks one
-        // GOB-column stride (1024B) past the reported size.  With one tight memblock per image that overhang is
-        // unmapped: uploads silently drop every texel with x >= 64 and reads return 0xFF.  Pick the tile height
-        // ourselves, replicating deko3d's pick and its base-level demotion, so size math and hardware programming
-        // agree by construction.  Safe here because our images are always mipLevels == 1.
+        // skips the demotion) and the TIC are programmed with the undemoted value, so the hardware walks one
+        // GOB-column stride (1024B) past the reported size.  With one tight memblock per image, that overhang is
+        // unmapped, causing uploads to silently drop every texel with x >= 64 and reads return 0xFF.  Pick the tile
+        // height ourselves, replicating deko3d's pick and its base-level demotion, so size math and hardware
+        // programming agree by construction.  Safe here because our images are always mipLevels == 1.
         const std::uint32_t heightAndHalfGobs = (height + height / 2u + 7u) / 8u;
-        std::uint32_t tileH = heightAndHalfGobs >= 16u  ? 4u
-                              : heightAndHalfGobs >= 8u ? 3u
-                              : heightAndHalfGobs >= 4u ? 2u
-                              : heightAndHalfGobs >= 2u ? 1u
-                                                        : 0u;
-        while (tileH != 0 && 8u << tileH - 1u >= height) {
-            --tileH;
+        std::uint32_t tileHeight = heightAndHalfGobs >= 16u  ? 4u
+                                   : heightAndHalfGobs >= 8u ? 3u
+                                   : heightAndHalfGobs >= 4u ? 2u
+                                   : heightAndHalfGobs >= 2u ? 1u
+                                                             : 0u;
+
+        while (tileHeight != 0 && 8u << tileHeight - 1u >= height) {
+            --tileHeight;
         }
 
         dk::ImageLayout layout = {};
         dk::ImageLayoutMaker{ device }
             .setFlags(DkImageFlags_CustomTileSize)
-            .setTileSize(static_cast<DkTileSize>(tileH))
+            .setTileSize(static_cast<DkTileSize>(tileHeight))
             .setFormat(DkImageFormat_RGBA8_Unorm)
             .setDimensions(width, height)
             .initialize(layout);
@@ -234,7 +237,16 @@ FilteringMode GfxRenderingApiDeko3d::GetTextureFilter() {
 }
 
 ImTextureID GfxRenderingApiDeko3d::GetTextureById(int id) {
-    return nullptr;
+    // ImTextureID is patched to void* in SoH's ImGui config.  Encode the texture's DkResHandle (image slot + immutable
+    // sampler slot) as an opaque pointer value; RenderDrawData decodes it and binds it against the descriptor sets
+    // already bound in StartFrame.  Handles are stable (slot == ID, sampler index stored per texture), so, unlike the
+    // standalone reference, we can pass the handle by value rather than a pointer into a table.
+    if (id < 0 || static_cast<std::size_t>(id) >= mTextures.size()) {
+        return nullptr;
+    }
+
+    const auto handle = dkMakeTextureHandle(static_cast<std::uint32_t>(id), mTextures[id].SamplerIndex);
+    return reinterpret_cast<ImTextureID>(static_cast<std::uintptr_t>(handle));
 }
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -549,6 +561,20 @@ void GfxRenderingApiDeko3d::StartFrame() {
     mUboRingOffset[mRing] = 0;
 
     auto cb = mFrameCmdBuf;
+    const int slot = mWindowBackend->GetCurrentImageSlot();
+
+    std::uint32_t fbWidth = 0;
+    std::uint32_t fbHeight = 0;
+    mWindowBackend->GetDimensions(&fbWidth, &fbHeight, nullptr, nullptr);
+
+    dk::ImageView colorView{ mWindowBackend->GetFramebuffer(slot) };
+    const dk::ImageView depthView{ mWindowBackend->GetDepthBuffer(slot) };
+
+    cb.bindRenderTargets({ &colorView }, &depthView);
+    cb.setViewports(0, { { 0.0f, 0.0f, static_cast<float>(fbWidth), static_cast<float>(fbHeight), 0.0f, 1.0f } });
+    cb.setScissors(0, { { 0, 0, fbWidth, fbHeight } });
+    cb.clearColor(0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
+    cb.clearDepthStencil(true, 1.0f, 0xFF, 0); // far = 1.0 in 0..1 depth
 
     // Bind the texture descriptor sets for the frame; individual textures are referenced per draw via bindTextures.
     cb.bindImageDescriptorSet(mImageDescMemBlock.getGpuAddr(), sMaxTextures);
@@ -635,6 +661,197 @@ void* GfxRenderingApiDeko3d::GetFramebufferTextureId(int fbId) {
 }
 
 void GfxRenderingApiDeko3d::SelectTextureFb(int fbId) {
+}
+
+// --------------------------------------------------------------------------------------------------------------------
+// ImGui renderer
+// --------------------------------------------------------------------------------------------------------------------
+
+void GfxRenderingApiDeko3d::EnsureImGuiFontsUploaded() {
+    const auto& io = ImGui::GetIO();
+
+    // Current and resident -> nothing to do.  SoH dirties the atlas (IsBuilt() -> false) by adding fonts after
+    // Gui::Init(); NewFrame calls this every frame, and we re-upload only on that transition.
+    if (io.Fonts->IsBuilt() && mImguiFontTexId >= 0) {
+        return;
+    }
+
+    std::uint8_t* pixels = nullptr;
+    std::int32_t width = 0;
+    std::int32_t height = 0;
+
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height); // (re)builds the atlas as a side effect
+    if (pixels == nullptr || width <= 0 || height <= 0) {
+        return;
+    }
+
+    if (mImguiFontTexId < 0) {
+        mImguiFontTexId = static_cast<std::int32_t>(NewTexture()); // Reserve a permanent slot the first time only
+    }
+
+    // UploadTexture keys off the current tile's selected ID; point tile 0 at the font slot for the upload, then
+    // restore so we don't perturb whatever tile state a caller had set.
+    const auto savedTile = mCurrentTile;
+    const auto savedId = mCurrentTextureIds[0];
+    SelectTexture(0, static_cast<std::uint32_t>(mImguiFontTexId));
+    UploadTexture(pixels, static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height));
+    mCurrentTile = savedTile;
+    mCurrentTextureIds[0] = savedId;
+
+    // Glyph sampling: linear + clamp on both axes -> the corresponding immutable sampler slot.
+    mTextures[mImguiFontTexId].SamplerIndex = SamplerIndex(true, G_TX_CLAMP, G_TX_CLAMP);
+    io.Fonts->SetTexID(GetTextureById(mImguiFontTexId));
+}
+
+void GfxRenderingApiDeko3d::RenderDrawData(ImDrawData* drawData) {
+    // Index format below assumes 16-bit indices.  SoH's ImGui config leaves ImDrawIdx at the default; assert so a
+    // future config change (32-bit) fails the build instead of silently corrupting geometry.
+    static_assert(sizeof(ImDrawIdx) == sizeof(std::uint16_t),
+                  "ImGui index width changed; switch the DkIdxFormat below to UInt32");
+
+    if (!drawData || drawData->CmdListsCount == 0 || drawData->TotalVtxCount == 0) {
+        return;
+    }
+
+    auto cb = mFrameCmdBuf;
+    const auto device = mWindowBackend->GetDevice();
+
+    // Grow the per-ring vertex/index buffers to fit this frame (2x headroom, matching the game vtx ring's
+    // amortization).
+    const std::size_t vtxBytes = static_cast<std::size_t>(drawData->TotalVtxCount) * sizeof(ImDrawVert);
+    const std::size_t idxBytes = static_cast<std::size_t>(drawData->TotalIdxCount) * sizeof(ImDrawIdx);
+
+    if (!mImGuiVtxMemBlock[mRing] || mImGuiVtxMemBlock[mRing].getSize() < vtxBytes) {
+        mImGuiVtxMemBlock[mRing] = nullptr; // Release before realloc; the ring's frame fence already gates reuse.
+        mImGuiVtxMemBlock[mRing] =
+            dk::MemBlockMaker{ device, AlignUp(std::max<std::uint32_t>(static_cast<std::uint32_t>(2 * vtxBytes),
+                                                                       DK_MEMBLOCK_ALIGNMENT),
+                                               DK_MEMBLOCK_ALIGNMENT) }
+                .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
+                .create();
+    }
+
+    if (!mImGuiIdxMemBlock[mRing] || mImGuiIdxMemBlock[mRing].getSize() < idxBytes) {
+        mImGuiIdxMemBlock[mRing] = nullptr;
+        mImGuiIdxMemBlock[mRing] =
+            dk::MemBlockMaker{ device, AlignUp(std::max<std::uint32_t>(static_cast<std::uint32_t>(2 * idxBytes),
+                                                                       DK_MEMBLOCK_ALIGNMENT),
+                                               DK_MEMBLOCK_ALIGNMENT) }
+                .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
+                .create();
+    }
+
+    std::uint32_t fbWidth = 0;
+    std::uint32_t fbHeight = 0;
+    mWindowBackend->GetDimensions(&fbWidth, &fbHeight, nullptr, nullptr);
+
+    // fb 0 is still the bound render target (StartFrame bound it; nothing rebinds it in this slice).  Set every piece
+    // of pipeline state ImGui needs explicitly rather than inheriting the game's last-draw state.  The blend equation
+    // is deliberately not re-bound: it is frame-global in this backend (bound once in StartFrame, standard
+    // over-blend), and ImGui wants the same, so we only flip the per-target blend-enable via ColorState.
+    cb.bindShaders(DkStageFlag_GraphicsMask, { &mWindowBackend->GetImGuiVsh(), &mWindowBackend->GetImGuiFsh() });
+    cb.bindRasterizerState(dk::RasterizerState{}.setCullMode(DkFace_None));
+    cb.bindColorState(dk::ColorState{}.setBlendEnable(0, true));
+    cb.bindColorWriteState(dk::ColorWriteState{});
+    cb.bindDepthStencilState(dk::DepthStencilState{}.setDepthTestEnable(false).setDepthWriteEnable(false));
+    cb.setViewports(0, { { 0.0f, 0.0f, static_cast<float>(fbWidth), static_cast<float>(fbHeight), 0.0f, 1.0f } });
+
+    // Orthographic projection from ImGui pixel space (origin top-left, y down; using DisplayPos/DisplaySize so the SoH
+    // on-screen-keyboard y-offset applied to DisplayPos is honored) to deko3d clip space.  Column-major mat4;
+    // translation in column 3.  ImGui z is 0, so the z row is correctness only.
+    const auto left = drawData->DisplayPos.x;
+    const auto right = drawData->DisplayPos.x + drawData->DisplaySize.x;
+    const auto top = drawData->DisplayPos.y;
+    const auto bottom = drawData->DisplayPos.y + drawData->DisplaySize.y;
+
+    float projection[16] = {};
+    projection[0] = 2.0f / (right - left);
+    projection[5] = 2.0f / (top - bottom);
+    projection[10] = -0.5f;
+    projection[12] = -(right + left) / (right - left);
+    projection[13] = -(top + bottom) / (top - bottom);
+    projection[14] = 0.5f;
+    projection[15] = 1.0f;
+
+    const auto uboOff = AlignUp(mUboRingOffset[mRing], DK_UNIFORM_BUF_ALIGNMENT);
+    if (uboOff + sizeof(projection) > sUniformRingSize) {
+        mWindowBackend->Trace("RenderDrawData: UBO ring overflow (bump sUniformRingSize)");
+        return;
+    }
+
+    std::memcpy(mUboRingCpu[mRing] + uboOff, projection, sizeof(projection));
+    mUboRingOffset[mRing] = uboOff + sUniformSlotSize;
+    cb.bindUniformBuffer(DkStage_Vertex, 0, mUboRingGpu[mRing] + uboOff, sUniformSlotSize);
+
+    constexpr std::array attribs = {
+        DkVtxAttribState{ 0, 0, offsetof(ImDrawVert, pos), DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
+        DkVtxAttribState{ 0, 0, offsetof(ImDrawVert, uv), DkVtxAttribSize_2x32, DkVtxAttribType_Float, 0 },
+        DkVtxAttribState{ 0, 0, offsetof(ImDrawVert, col), DkVtxAttribSize_4x8, DkVtxAttribType_Unorm, 0 },
+    };
+
+    cb.bindVtxAttribState(dk::detail::ArrayProxy(attribs.size(), attribs.data()));
+    cb.bindVtxBufferState({ { sizeof(ImDrawVert), 0 } });
+    cb.bindVtxBuffer(0, mImGuiVtxMemBlock[mRing].getGpuAddr(), mImGuiVtxMemBlock[mRing].getSize());
+    cb.bindIdxBuffer(DkIdxFormat_Uint16, mImGuiIdxMemBlock[mRing].getGpuAddr());
+
+    const auto vtxBase = static_cast<std::uint8_t*>(mImGuiVtxMemBlock[mRing].getCpuAddr());
+    const auto idxBase = static_cast<std::uint8_t*>(mImGuiIdxMemBlock[mRing].getCpuAddr());
+    std::size_t vtxByteOff = 0;
+    std::size_t idxByteOff = 0;
+    DkResHandle boundHandle = ~0u; // Force the first bindTextures; ~0 is not a valid dkMakeTextureHandle value.
+
+    const ImVec2 clipOff = drawData->DisplayPos;
+
+    for (int n = 0; n < drawData->CmdListsCount; ++n) {
+        const auto list = drawData->CmdLists[n];
+        const std::size_t listVtxBytes = static_cast<std::size_t>(list->VtxBuffer.Size) * sizeof(ImDrawVert);
+        const std::size_t listIdxBytes = static_cast<std::size_t>(list->IdxBuffer.Size) * sizeof(ImDrawIdx);
+
+        std::memcpy(vtxBase + vtxByteOff, list->VtxBuffer.Data, listVtxBytes);
+        std::memcpy(idxBase + idxByteOff, list->IdxBuffer.Data, listIdxBytes);
+
+        for (const ImDrawCmd& cmd : list->CmdBuffer) {
+            if (cmd.UserCallback) {
+                cmd.UserCallback(list, &cmd); // i.e., ImDrawCallback_ResetRenderState-style hooks
+                continue;
+            }
+
+            // Clip rect -> scissor, shifted by DisplayPos and clamped to the render target (deko3d rejects scissors
+            // outside the target).  Drop fully-clipped commands.
+            const std::int32_t x0 =
+                std::clamp(static_cast<int>(cmd.ClipRect.x - clipOff.x), 0, static_cast<int>(fbWidth));
+            const std::int32_t y0 =
+                std::clamp(static_cast<int>(cmd.ClipRect.y - clipOff.y), 0, static_cast<int>(fbHeight));
+            const std::int32_t x1 =
+                std::clamp(static_cast<int>(cmd.ClipRect.z - clipOff.x), 0, static_cast<int>(fbWidth));
+            const std::int32_t y1 =
+                std::clamp(static_cast<int>(cmd.ClipRect.w - clipOff.y), 0, static_cast<int>(fbHeight));
+
+            if (x1 <= x0 || y1 <= y0) {
+                continue;
+            }
+
+            cb.setScissors(0, { { static_cast<std::uint32_t>(x0), static_cast<std::uint32_t>(y0),
+                                  static_cast<std::uint32_t>(x1 - x0), static_cast<std::uint32_t>(y1 - y0) } });
+
+            if (const auto handle = static_cast<DkResHandle>(reinterpret_cast<std::uintptr_t>(cmd.GetTexID()));
+                handle != boundHandle) {
+                boundHandle = handle;
+                cb.bindTextures(DkStage_Fragment, 0, handle);
+            }
+
+            // VtxOffset is honored because ImGuiBackendFlags_RendererHasVtxOffset is set in Fast3dGui's deko3d init.
+            cb.drawIndexed(DkPrimitive_Triangles, cmd.ElemCount, 1,
+                           cmd.IdxOffset + static_cast<std::uint32_t>(idxByteOff / sizeof(ImDrawIdx)),
+                           cmd.VtxOffset + static_cast<std::uint32_t>(vtxByteOff / sizeof(ImDrawVert)), 0);
+        }
+
+        vtxByteOff += listVtxBytes;
+        idxByteOff += listIdxBytes;
+    }
+
+    // Flush the tiler's fragment writes to fb 0 before it is presented in SwapBuffersBegin.
+    cb.barrier(DkBarrier_Fragments, 0);
 }
 } // namespace Fast
 #endif
