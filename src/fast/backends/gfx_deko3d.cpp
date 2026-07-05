@@ -206,7 +206,7 @@ void GfxRenderingApiDeko3d::UploadTexture(const std::uint8_t* rgba32Buf, std::ui
     queue.submitCommands(mUploadCmdBuf.finishList());
     queue.waitIdle();
 
-    // Point this texture's descriptor slot at the (possibly newly recreated image).  Slot == texture id.  Sampled by
+    // Point this texture's descriptor slot at the (possibly newly recreated image).  Slot == texture ID.  Sampled by
     // dkMakeTextureHandle(id, id) at draw time; the dirty flag forces a descriptor-cache invalidate before that draw.
     mImageDescriptors[texId].initialize(dk::ImageView{ texture.Image });
     mIsDescriptorsDirty = true;
@@ -263,22 +263,19 @@ void GfxRenderingApiDeko3d::SetZmodeDecal(bool decal) {
 }
 
 void GfxRenderingApiDeko3d::SetViewport(int x, int y, int width, int height) {
-    std::uint32_t fbHeight = 0;
-    mWindowBackend->GetDimensions(nullptr, &fbHeight, nullptr, nullptr);
-
+    // Flip Y against the *current* render target (mGameFb at internal resolution, or the window for fb 0), set by the
+    // last StartDrawToFramebuffer.  Flipping against the window height while the game FB is bound is the stretch this
+    // slice removes.
     auto cb = mFrameCmdBuf;
-    cb.setViewports(0, { { static_cast<float>(x),
-                           static_cast<float>(static_cast<int>(fbHeight) - y - height), // Top-left origin flip
-                           static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f } });
+    cb.setViewports(
+        0, { { static_cast<float>(x),
+               static_cast<float>(static_cast<std::int32_t>(mRenderTargetHeight) - y - height), // Top-left origin
+               static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f } });
 }
 
 void GfxRenderingApiDeko3d::SetScissor(int x, int y, int width, int height) {
-    std::uint32_t fbWidth = 0;
-    std::uint32_t fbHeight = 0;
-    mWindowBackend->GetDimensions(&fbWidth, &fbHeight, nullptr, nullptr);
-
-    const auto w = static_cast<int>(fbWidth);
-    const auto h = static_cast<int>(fbHeight);
+    const auto w = static_cast<std::int32_t>(mRenderTargetWidth);
+    const auto h = static_cast<std::int32_t>(mRenderTargetHeight);
     const auto flippedY = h - y - height;
 
     // deko3d rejects scissors outside the render target; clamp.
@@ -549,6 +546,14 @@ void GfxRenderingApiDeko3d::Init() {
     // The table is written before any frame is recorded, but force one descriptor-cache invalidate on the first
     // textured draw regardless of upload order.
     mIsDescriptorsDirty = true;
+
+    // Reserve framebuffer ID 0 for the window/swap chain (owns no image; its surfaces come from the window backend's
+    // acquired slot).  CreateFramebuffer appends real offscreen targets starting at ID 1.
+    mFramebuffers.resize(1);
+
+    // Seed the current-target dims with the window size so a stray draw before the first StartDrawToFramebuffer (the
+    // interpreter never does this, but be defensive) flips against a sane height rather than 0.
+    mWindowBackend->GetDimensions(&mRenderTargetWidth, &mRenderTargetHeight, nullptr, nullptr);
 }
 
 void GfxRenderingApiDeko3d::OnResize() {
@@ -561,20 +566,11 @@ void GfxRenderingApiDeko3d::StartFrame() {
     mUboRingOffset[mRing] = 0;
 
     auto cb = mFrameCmdBuf;
-    const int slot = mWindowBackend->GetCurrentImageSlot();
 
-    std::uint32_t fbWidth = 0;
-    std::uint32_t fbHeight = 0;
-    mWindowBackend->GetDimensions(&fbWidth, &fbHeight, nullptr, nullptr);
-
-    dk::ImageView colorView{ mWindowBackend->GetFramebuffer(slot) };
-    const dk::ImageView depthView{ mWindowBackend->GetDepthBuffer(slot) };
-
-    cb.bindRenderTargets({ &colorView }, &depthView);
-    cb.setViewports(0, { { 0.0f, 0.0f, static_cast<float>(fbWidth), static_cast<float>(fbHeight), 0.0f, 1.0f } });
-    cb.setScissors(0, { { 0, 0, fbWidth, fbHeight } });
-    cb.clearColor(0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
-    cb.clearDepthStencil(true, 1.0f, 0xFF, 0); // far = 1.0 in 0..1 depth
+    // No render target is bound here anymore.  The interpreter always issues StartDrawToFramebuffer (mGameFb or 0)
+    // immediately after StartFrame, followed by ClearFramebuffer -- that is where the RT bind + clear now live (slice
+    // 1a bound fb 0 here only because StartDrawToFramebuffer was still a no-op).  Binding here would just be an extra
+    // bind the first StartDrawToFramebuffer overwrites.
 
     // Bind the texture descriptor sets for the frame; individual textures are referenced per draw via bindTextures.
     cb.bindImageDescriptorSet(mImageDescMemBlock.getGpuAddr(), sMaxTextures);
@@ -618,15 +614,121 @@ void GfxRenderingApiDeko3d::FinishRender() {
 // --------------------------------------------------------------------------------------------------------------------
 
 int GfxRenderingApiDeko3d::CreateFramebuffer() {
-    return 0;
+    // ID 0 is reserved for the window in Init(); real targets start at 1.  The color surface is a reserved texture
+    // slot so it samples through the shared descriptor set (GetFramebufferTextureId/SelectTextureFb -> DkResHandle).
+    const auto id = static_cast<std::int32_t>(mFramebuffers.size());
+    auto& fb = mFramebuffers.emplace_back();
+    fb.TextureId = static_cast<std::int32_t>(NewTexture());
+
+    // FB surfaces are sampled as whole images (ImGui composite, FB effects), so linear + clamp -- never wrap/nearest.
+    mTextures[fb.TextureId].SamplerIndex = SamplerIndex(true, G_TX_CLAMP, G_TX_CLAMP);
+    return id;
 }
 
 void GfxRenderingApiDeko3d::UpdateFramebufferParameters(int fbId, std::uint32_t width, std::uint32_t height,
                                                         std::uint32_t msaaLevel, bool openglInvertY, bool renderTarget,
                                                         bool hasDepthBuffer, bool canExtractDepth) {
+    // fb 0 is the window: its surfaces are owned by the window backend and sized to the swap chain, so there is
+    // nothing to (re)allocate here.
+    if (fbId == 0 || fbId >= static_cast<std::int32_t>(mFramebuffers.size())) {
+        return;
+    }
+
+    width = std::max(width, 1u);
+    height = std::max(height, 1u);
+
+    auto& [TextureId, DepthMemBlock, DepthImage, Width, Height, HasDepth, IsYInverted] = mFramebuffers[fbId];
+    auto& texture = mTextures[TextureId];
+    const bool isSizeChanged = texture.Width != width || texture.Height != height;
+
+    const auto device = mWindowBackend->GetDevice();
+
+    if (isSizeChanged) {
+        // Resize frees an image a still-in-flight frame may sample (resolution change, dock/undock).  Drain first --
+        // this path is rare (not per-frame), so the stall is acceptable and prevents a use-after-free of GPU memory.
+        mWindowBackend->GetQueue().waitIdle();
+
+        // Color surface: render target + sampled, no HwCompression (sampled every frame; compression would need a
+        // resolve before each sample).  Default tiling -- the UploadTexture CustomTileSize workaround targets small
+        // block-linear *sampled* uploads, not viewport-sized render targets.
+        dk::ImageLayout colorLayout = {};
+        dk::ImageLayoutMaker{ device }
+            .setFlags(DkImageFlags_UsageRender)
+            .setFormat(DkImageFormat_RGBA8_Unorm)
+            .setDimensions(width, height)
+            .initialize(colorLayout);
+
+        const auto colorSize = AlignUp(static_cast<std::uint32_t>(colorLayout.getSize()), colorLayout.getAlignment());
+        texture.ImageMemBlock = dk::MemBlockMaker{ device, AlignUp(colorSize, DK_MEMBLOCK_ALIGNMENT) }
+                                    .setFlags(DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image)
+                                    .create();
+        texture.Image.initialize(colorLayout, texture.ImageMemBlock, 0);
+        texture.Width = width;
+        texture.Height = height;
+
+        // Repoint this texture's descriptor slot at the new image and force a cache invalidate before it is sampled.
+        mImageDescriptors[TextureId].initialize(dk::ImageView{ texture.Image });
+        mIsDescriptorsDirty = true;
+    }
+
+    if (hasDepthBuffer && (isSizeChanged || !HasDepth)) {
+        dk::ImageLayout depthLayout = {};
+        dk::ImageLayoutMaker{ device }
+            .setFlags(DkImageFlags_UsageRender | DkImageFlags_HwCompression)
+            .setFormat(DkImageFormat_Z24S8)
+            .setDimensions(width, height)
+            .initialize(depthLayout);
+
+        const auto depthSize = AlignUp(static_cast<std::uint32_t>(depthLayout.getSize()), depthLayout.getAlignment());
+        DepthMemBlock = dk::MemBlockMaker{ device, AlignUp(depthSize, DK_MEMBLOCK_ALIGNMENT) }
+                            .setFlags(DkMemBlockFlags_GpuCached | DkMemBlockFlags_Image)
+                            .create();
+        DepthImage.initialize(depthLayout, DepthMemBlock, 0);
+    }
+
+    Width = width;
+    Height = height;
+    HasDepth = hasDepthBuffer;
+    IsYInverted = openglInvertY;
 }
 
 void GfxRenderingApiDeko3d::StartDrawToFramebuffer(int fbId, float noiseScale) {
+    if (fbId < 0 || fbId >= static_cast<std::int32_t>(mFramebuffers.size())) {
+        return;
+    }
+
+    auto cb = mFrameCmdBuf;
+
+    // Flush the previous target's fragment writes and invalidate the texture/descriptor caches before binding the new
+    // one, so a later draw that samples the just-rendered target (ImGui compositing mGameFb; FB effects in a later
+    // slice) reads finished, non-stale texels.  A handful per frame -- cheap against total frame cost.
+    cb.barrier(DkBarrier_Fragments, DkInvalidateFlags_Image | DkInvalidateFlags_Descriptors);
+
+    if (fbId == 0) {
+        const std::int32_t slot = mWindowBackend->GetCurrentImageSlot();
+        dk::ImageView colorView{ mWindowBackend->GetFramebuffer(slot) };
+        const dk::ImageView depthView{ mWindowBackend->GetDepthBuffer(slot) };
+        cb.bindRenderTargets({ &colorView }, &depthView);
+        mWindowBackend->GetDimensions(&mRenderTargetWidth, &mRenderTargetHeight, nullptr, nullptr);
+    } else {
+        const auto& fb = mFramebuffers[fbId];
+        dk::ImageView colorView{ mTextures[fb.TextureId].Image };
+
+        if (fb.HasDepth) {
+            const dk::ImageView depthView{ fb.DepthImage };
+            cb.bindRenderTargets({ &colorView }, &depthView);
+        } else {
+            cb.bindRenderTargets({ &colorView }, nullptr);
+        }
+
+        mRenderTargetWidth = fb.Width;
+        mRenderTargetHeight = fb.Height;
+    }
+
+    mCurrentFb = fbId;
+
+    // TODO: ubershader has no noise term yet
+    static_cast<void>(noiseScale);
 }
 
 void GfxRenderingApiDeko3d::CopyFramebuffer(int fbDstId, int fbSrcId, int srcX0, int srcY0, int srcX1, int srcY1,
@@ -634,6 +736,25 @@ void GfxRenderingApiDeko3d::CopyFramebuffer(int fbDstId, int fbSrcId, int srcX0,
 }
 
 void GfxRenderingApiDeko3d::ClearFramebuffer(bool color, bool depth) {
+    if (!color && !depth) {
+        return;
+    }
+
+    auto cb = mFrameCmdBuf;
+
+    // Clears honor the scissor; widen viewport+scissor to the whole current target so the clear covers it regardless
+    // of the last draw's scissor.  The interpreter re-emits viewport/scissor after this (viewport_or_scissor_changed),
+    // so this does not leak into subsequent draws.
+    cb.setViewports(0, { { 0.0f, 0.0f, static_cast<float>(mRenderTargetWidth), static_cast<float>(mRenderTargetHeight),
+                           0.0f, 1.0f } });
+    cb.setScissors(0, { { 0, 0, mRenderTargetWidth, mRenderTargetHeight } });
+
+    if (color) {
+        cb.clearColor(0, DkColorMask_RGBA, 0.0f, 0.0f, 0.0f, 1.0f);
+    }
+    if (depth) {
+        cb.clearDepthStencil(true, 1.0f, 0xFF, 0); // far = 1.0 in 0..1 depth
+    }
 }
 
 void GfxRenderingApiDeko3d::ReadFramebufferToCPU(int fbId, std::uint32_t width, std::uint32_t height,
@@ -657,7 +778,21 @@ GfxRenderingApiDeko3d::GetPixelDepth(int fbId, const std::set<std::pair<float, f
 }
 
 void* GfxRenderingApiDeko3d::GetFramebufferTextureId(int fbId) {
-    return nullptr;
+    // Same handle encoding as GetTextureById: the interpreter stores this as mGfxFrameBuffer and passes it to
+    // ImGui::Image, which flows through RenderDrawData as a DkResHandle into the shared descriptor set.  fb 0 (window)
+    // owns no sampled surface -> null (the interpreter only requests this for offscreen targets).
+    if (fbId <= 0 || fbId >= static_cast<std::int32_t>(mFramebuffers.size())) {
+        return nullptr;
+    }
+
+    const auto& fb = mFramebuffers[fbId];
+    if (fb.TextureId < 0) {
+        return nullptr;
+    }
+
+    const auto handle =
+        dkMakeTextureHandle(static_cast<std::uint32_t>(fb.TextureId), mTextures[fb.TextureId].SamplerIndex);
+    return reinterpret_cast<void*>(static_cast<std::uintptr_t>(handle));
 }
 
 void GfxRenderingApiDeko3d::SelectTextureFb(int fbId) {
@@ -721,19 +856,18 @@ void GfxRenderingApiDeko3d::RenderDrawData(ImDrawData* drawData) {
     const std::size_t vtxBytes = static_cast<std::size_t>(drawData->TotalVtxCount) * sizeof(ImDrawVert);
     const std::size_t idxBytes = static_cast<std::size_t>(drawData->TotalIdxCount) * sizeof(ImDrawIdx);
 
-    if (!mImGuiVtxMemBlock[mRing] || mImGuiVtxMemBlock[mRing].getSize() < vtxBytes) {
-        mImGuiVtxMemBlock[mRing] = nullptr; // Release before realloc; the ring's frame fence already gates reuse.
-        mImGuiVtxMemBlock[mRing] =
+    if (!mImguiVtxMemBlock[mRing] || mImguiVtxMemBlock[mRing].getSize() < vtxBytes) {
+        mImguiVtxMemBlock[mRing] = nullptr; // Release before realloc; the ring's frame fence already gates reuse.
+        mImguiVtxMemBlock[mRing] =
             dk::MemBlockMaker{ device, AlignUp(std::max<std::uint32_t>(static_cast<std::uint32_t>(2 * vtxBytes),
                                                                        DK_MEMBLOCK_ALIGNMENT),
                                                DK_MEMBLOCK_ALIGNMENT) }
                 .setFlags(DkMemBlockFlags_CpuUncached | DkMemBlockFlags_GpuCached)
                 .create();
     }
-
-    if (!mImGuiIdxMemBlock[mRing] || mImGuiIdxMemBlock[mRing].getSize() < idxBytes) {
-        mImGuiIdxMemBlock[mRing] = nullptr;
-        mImGuiIdxMemBlock[mRing] =
+    if (!mImguiIdxMemBlock[mRing] || mImguiIdxMemBlock[mRing].getSize() < idxBytes) {
+        mImguiIdxMemBlock[mRing] = nullptr;
+        mImguiIdxMemBlock[mRing] =
             dk::MemBlockMaker{ device, AlignUp(std::max<std::uint32_t>(static_cast<std::uint32_t>(2 * idxBytes),
                                                                        DK_MEMBLOCK_ALIGNMENT),
                                                DK_MEMBLOCK_ALIGNMENT) }
@@ -791,18 +925,27 @@ void GfxRenderingApiDeko3d::RenderDrawData(ImDrawData* drawData) {
 
     cb.bindVtxAttribState(dk::detail::ArrayProxy(attribs.size(), attribs.data()));
     cb.bindVtxBufferState({ { sizeof(ImDrawVert), 0 } });
-    cb.bindVtxBuffer(0, mImGuiVtxMemBlock[mRing].getGpuAddr(), mImGuiVtxMemBlock[mRing].getSize());
-    cb.bindIdxBuffer(DkIdxFormat_Uint16, mImGuiIdxMemBlock[mRing].getGpuAddr());
+    cb.bindVtxBuffer(0, mImguiVtxMemBlock[mRing].getGpuAddr(), mImguiVtxMemBlock[mRing].getSize());
+    cb.bindIdxBuffer(DkIdxFormat_Uint16, mImguiIdxMemBlock[mRing].getGpuAddr());
 
-    const auto vtxBase = static_cast<std::uint8_t*>(mImGuiVtxMemBlock[mRing].getCpuAddr());
-    const auto idxBase = static_cast<std::uint8_t*>(mImGuiIdxMemBlock[mRing].getCpuAddr());
+    // Make ImGui self-sufficient about descriptor freshness rather than leaning on a preceding RT-switch invalidate:
+    // the font atlas (and any FB color surface it samples) writes its descriptor with mIsDescriptorsDirty set, and
+    // ImGui may be the first consumer to sample it this frame.
+    if (mIsDescriptorsDirty) {
+        cb.barrier(DkBarrier_None, DkInvalidateFlags_Image | DkInvalidateFlags_Descriptors);
+        mIsDescriptorsDirty = false;
+    }
+
+    const auto vtxBase = static_cast<std::uint8_t*>(mImguiVtxMemBlock[mRing].getCpuAddr());
+    const auto idxBase = static_cast<std::uint8_t*>(mImguiIdxMemBlock[mRing].getCpuAddr());
+
     std::size_t vtxByteOff = 0;
     std::size_t idxByteOff = 0;
     DkResHandle boundHandle = ~0u; // Force the first bindTextures; ~0 is not a valid dkMakeTextureHandle value.
 
     const ImVec2 clipOff = drawData->DisplayPos;
 
-    for (int n = 0; n < drawData->CmdListsCount; ++n) {
+    for (std::int32_t n = 0; n < drawData->CmdListsCount; ++n) {
         const auto list = drawData->CmdLists[n];
         const std::size_t listVtxBytes = static_cast<std::size_t>(list->VtxBuffer.Size) * sizeof(ImDrawVert);
         const std::size_t listIdxBytes = static_cast<std::size_t>(list->IdxBuffer.Size) * sizeof(ImDrawIdx);
@@ -818,14 +961,14 @@ void GfxRenderingApiDeko3d::RenderDrawData(ImDrawData* drawData) {
 
             // Clip rect -> scissor, shifted by DisplayPos and clamped to the render target (deko3d rejects scissors
             // outside the target).  Drop fully-clipped commands.
-            const std::int32_t x0 =
-                std::clamp(static_cast<int>(cmd.ClipRect.x - clipOff.x), 0, static_cast<int>(fbWidth));
-            const std::int32_t y0 =
-                std::clamp(static_cast<int>(cmd.ClipRect.y - clipOff.y), 0, static_cast<int>(fbHeight));
-            const std::int32_t x1 =
-                std::clamp(static_cast<int>(cmd.ClipRect.z - clipOff.x), 0, static_cast<int>(fbWidth));
-            const std::int32_t y1 =
-                std::clamp(static_cast<int>(cmd.ClipRect.w - clipOff.y), 0, static_cast<int>(fbHeight));
+            const auto x0 = std::clamp(static_cast<std::int32_t>(cmd.ClipRect.x - clipOff.x), 0,
+                                       static_cast<std::int32_t>(fbWidth));
+            const auto y0 = std::clamp(static_cast<std::int32_t>(cmd.ClipRect.y - clipOff.y), 0,
+                                       static_cast<std::int32_t>(fbHeight));
+            const auto x1 = std::clamp(static_cast<std::int32_t>(cmd.ClipRect.z - clipOff.x), 0,
+                                       static_cast<std::int32_t>(fbWidth));
+            const auto y1 = std::clamp(static_cast<std::int32_t>(cmd.ClipRect.w - clipOff.y), 0,
+                                       static_cast<std::int32_t>(fbHeight));
 
             if (x1 <= x0 || y1 <= y0) {
                 continue;

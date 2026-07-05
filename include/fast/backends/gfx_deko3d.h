@@ -30,6 +30,23 @@ struct TextureDeko3d {
                                     // interpreter's cache-insert defaults.
 };
 
+/**
+ * @brief One render-target framebuffer.  The color surface lives in the rapi's shared texture table (TextureId is its
+ *        mTextures slot == its image-descriptor slot), so GetFramebufferTextureId/SelectTextureFb resolve to a
+ *        DkResHandle in the already-bound descriptor set -- same handle space as every other sampled texture.
+ *        Depth is owned here.  ID 0 is the swap chain/window and owns no image (TextureId == -1); its color/depth come
+ *        from the window backend's acquired slot.
+ */
+struct FramebufferDeko3d {
+    std::int32_t TextureId = -1; // Color surface's slot in mTextures; -1 for the window (ID 0)
+    dk::UniqueMemBlock DepthMemBlock = {};
+    dk::Image DepthImage = {};
+    std::uint32_t Width = 0;
+    std::uint32_t Height = 0;
+    bool HasDepth = false;
+    bool IsYInverted = false; // Carried from the interpreter; unused on deko3d
+};
+
 class GfxRenderingApiDeko3d final : public GfxRenderingAPI {
   public:
     explicit GfxRenderingApiDeko3d(GfxWindowBackendDeko3d* windowBackend);
@@ -184,9 +201,19 @@ class GfxRenderingApiDeko3d final : public GfxRenderingAPI {
     // BeginFrameRecording, so overwriting slot mRing here can't race an in-flight frame.  Grow-only; created lazily on
     // first use and resized (never shrunk) when a frame's draw data exceeds the current capacity.  The ortho UBO
     // reuses the fragment CombinerUbo ring.
-    std::array<dk::UniqueMemBlock, sVtxRing> mImGuiVtxMemBlock = {};
-    std::array<dk::UniqueMemBlock, sVtxRing> mImGuiIdxMemBlock = {};
+    std::array<dk::UniqueMemBlock, sVtxRing> mImguiVtxMemBlock = {};
+    std::array<dk::UniqueMemBlock, sVtxRing> mImguiIdxMemBlock = {};
     std::int32_t mImguiFontTexId = -1; // Reserved slot in mTextures for the font atlas (== its descriptor slot)
+
+    // Framebuffer table.  Index == interpreter framebuffer ID; index 0 is the window/swap chain (no owned image).
+    // CreateFramebuffer appends starting at ID 1.  Color surfaces live in mTextures (FramebufferDeko3d::TextureId).
+    std::vector<FramebufferDeko3d> mFramebuffers = {};
+    std::int32_t mCurrentFb = 0;
+
+    // Dimensions of the render target bound by the last StartDrawToFramebuffer.  SetViewport/SetScissor flip Y and
+    // clamp against these, not the window.
+    std::uint32_t mRenderTargetWidth = 0;
+    std::uint32_t mRenderTargetHeight = 0;
 };
 } // namespace Fast
 #endif
