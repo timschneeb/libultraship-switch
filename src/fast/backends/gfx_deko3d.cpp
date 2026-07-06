@@ -1,8 +1,9 @@
 #if defined(ENABLE_DEKO3D)
 #include "fast/backends/gfx_deko3d.h"
-#include "fast/interpreter.h"
 
 #include <imgui.h>
+
+#include "fast/interpreter.h"
 
 namespace {
 constexpr std::uint32_t gVtxRingSize = 0x800000; // 8 MiB per slot
@@ -650,7 +651,7 @@ void GfxRenderingApiDeko3d::UpdateFramebufferParameters(int fbId, std::uint32_t 
 
         // Color surface: render target + sampled, no HwCompression (sampled every frame; compression would need a
         // resolve before each sample).  Default tiling -- the UploadTexture CustomTileSize workaround targets small
-        // block-linear *sampled* uploads, not viewport-sized render targets.
+        // block-linear sampled uploads.
         dk::ImageLayout colorLayout = {};
         dk::ImageLayoutMaker{ device }
             .setFlags(DkImageFlags_UsageRender)
@@ -733,6 +734,101 @@ void GfxRenderingApiDeko3d::StartDrawToFramebuffer(int fbId, float noiseScale) {
 
 void GfxRenderingApiDeko3d::CopyFramebuffer(int fbDstId, int fbSrcId, int srcX0, int srcY0, int srcX1, int srcY1,
                                             int dstX0, int dstY0, int dstX1, int dstY1) {
+    if (fbSrcId < 0 || fbSrcId >= static_cast<std::int32_t>(mFramebuffers.size()) || fbDstId < 0 ||
+        fbDstId >= static_cast<std::int32_t>(mFramebuffers.size())) {
+        return;
+    }
+
+    // Resolve each ID to its color image + dimensions.  fb 0 is the window's current swap chain slot; offscreen IDs
+    // use their reserved mTextures slot.
+    const auto Resolve = [&](std::int32_t fbId, dk::Image& outImage, std::uint32_t& outW, std::uint32_t& outH) -> bool {
+        if (fbId == 0) {
+            const auto slot = mWindowBackend->GetCurrentImageSlot();
+            if (slot < 0) {
+                return false;
+            }
+
+            outImage = mWindowBackend->GetFramebuffer(slot);
+            mWindowBackend->GetDimensions(&outW, &outH, nullptr, nullptr);
+            return true;
+        }
+
+        const auto& fb = mFramebuffers[fbId];
+        if (fb.TextureId < 0) {
+            return false;
+        }
+
+        outImage = mTextures[fb.TextureId].Image;
+        outW = mTextures[fb.TextureId].Width;
+        outH = mTextures[fb.TextureId].Height;
+        return true;
+    };
+
+    dk::Image srcImage = {};
+    dk::Image dstImage = {};
+    std::uint32_t srcW = 0;
+    std::uint32_t srcH = 0;
+    std::uint32_t dstW = 0;
+    std::uint32_t dstH = 0;
+
+    if (!Resolve(fbSrcId, srcImage, srcW, srcH) || !Resolve(fbDstId, dstImage, dstW, dstH)) {
+        return;
+    }
+
+    // Clamp both regions to their image bounds (interpreter coords are top-left, matching deko3d's copy convention;
+    // no Y-flip -- consistent with the top-left origin used throughout this backend).
+    const auto ClampRect = [](std::int32_t x0, std::int32_t y0, std::int32_t x1, std::int32_t y1, std::uint32_t w,
+                              std::uint32_t h, std::uint32_t& ox, std::uint32_t& oy, std::uint32_t& ow,
+                              std::uint32_t& oh) {
+        const auto cx0 = std::clamp(x0, 0, static_cast<std::int32_t>(w));
+        const auto cy0 = std::clamp(y0, 0, static_cast<std::int32_t>(h));
+        const auto cx1 = std::clamp(x1, 0, static_cast<std::int32_t>(w));
+        const auto cy1 = std::clamp(y1, 0, static_cast<std::int32_t>(h));
+        ox = static_cast<std::uint32_t>(cx0);
+        oy = static_cast<std::uint32_t>(cy0);
+        ow = static_cast<std::uint32_t>(std::max(0, cx1 - cx0));
+        oh = static_cast<std::uint32_t>(std::max(0, cy1 - cy0));
+    };
+
+    std::uint32_t sx = 0;
+    std::uint32_t sy = 0;
+    std::uint32_t sw = 0;
+    std::uint32_t sh = 0;
+    std::uint32_t dx = 0;
+    std::uint32_t dy = 0;
+    std::uint32_t dw = 0;
+    std::uint32_t dh = 0;
+
+    ClampRect(srcX0, srcY0, srcX1, srcY1, srcW, srcH, sx, sy, sw, sh);
+    ClampRect(dstX0, dstY0, dstX1, dstY1, dstW, dstH, dx, dy, dw, dh);
+
+    if (sw == 0 || sh == 0) {
+        return;
+    }
+
+    // deko3d copyImage is a 1:1 transfer -- extents must match.
+    const std::uint32_t width = std::min(sw, dw);
+    const std::uint32_t height = std::min(sh, dh);
+
+    // TODO
+    if (sw != dw || sh != dh) {
+        mWindowBackend->Trace("CopyFramebuffer: scaled copy requested; skipping");
+        return;
+    }
+
+    auto cb = mFrameCmdBuf;
+    // Flush any pending fragment writes to the source before the transfer reads it.  copyImage is not a render-pass
+    // operation and does not disturb the currently bound render target, so no rebind afterward.
+    cb.barrier(DkBarrier_Fragments, DkInvalidateFlags_Image);
+
+    const DkImageRect srcRect = { sx, sy, 0, width, height, 1 };
+    const DkImageRect dstRect = { dx, dy, 0, width, height, 1 };
+
+    cb.copyImage(dk::ImageView{ srcImage }, srcRect, dk::ImageView{ dstImage }, dstRect);
+
+    // The destination's contents changed; force a texture-cache invalidate before it is next sampled (reuses the
+    // descriptor-dirty path, whose barrier invalidates the image cache).
+    mIsDescriptorsDirty = true;
 }
 
 void GfxRenderingApiDeko3d::ClearFramebuffer(bool color, bool depth) {
@@ -796,6 +892,15 @@ void* GfxRenderingApiDeko3d::GetFramebufferTextureId(int fbId) {
 }
 
 void GfxRenderingApiDeko3d::SelectTextureFb(int fbId) {
+    // Bind the FB's color surface as tile 0's sampled texture (game sampling a framebuffer: reflections, subscreen,
+    // freeze-frame).  Its descriptor already exists (UpdateFramebufferParameters) and its writes were flushed by the
+    // RT-switch barrier when the game stopped rendering to it, so no extra barrier here.  fb 0 owns no sampled
+    // surface.
+    if (fbId <= 0 || fbId >= static_cast<std::int32_t>(mFramebuffers.size()) || mFramebuffers[fbId].TextureId < 0) {
+        return;
+    }
+
+    SelectTexture(0, static_cast<std::uint32_t>(mFramebuffers[fbId].TextureId));
 }
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -816,7 +921,7 @@ void GfxRenderingApiDeko3d::EnsureImGuiFontsUploaded() {
     std::int32_t height = 0;
 
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height); // (re)builds the atlas as a side effect
-    if (pixels == nullptr || width <= 0 || height <= 0) {
+    if (!pixels || width <= 0 || height <= 0) {
         return;
     }
 
