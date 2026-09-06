@@ -69,6 +69,7 @@ std::int64_t NowNs() {
 std::int64_t gDbgFence = 0;
 std::int64_t gDbgAcquire = 0;
 std::int64_t gDbgSubmit = 0;
+std::int64_t gDbgPace = 0;
 std::int64_t gDbgPresent = 0;
 std::int64_t gDbgRecord = 0;
 std::int64_t gDbgFenceMax = 0;
@@ -105,6 +106,29 @@ void GfxWindowBackendDeko3d::CreateDeko3dDevice() {
 }
 
 void GfxWindowBackendDeko3d::CreateSwapChain(std::uint32_t width, std::uint32_t height) {
+    {
+        char buffer[256];
+        std::snprintf(buffer, sizeof(buffer), "CreateSwapChain: requested=%ux%u", width, height);
+        Deko3dTrace(buffer);
+    }
+
+    NWindow* window = nwindowGetDefault();
+    {
+        u32 windowWidth = 0;
+        u32 windowHeight = 0;
+        const Result rc = nwindowGetDimensions(window, &windowWidth, &windowHeight);
+
+        char buffer[256];
+        if (R_SUCCEEDED(rc)) {
+            std::snprintf(buffer, sizeof(buffer), "CreateSwapChain: nwindow before=%ux%u", windowWidth, windowHeight);
+        } else {
+            std::snprintf(buffer, sizeof(buffer), "CreateSwapChain: nwindowGetDimensions(before) failed rc=0x%08X",
+                          static_cast<unsigned>(rc));
+        }
+
+        Deko3dTrace(buffer);
+    }
+
     mWidth = width;
     mHeight = height;
 
@@ -152,7 +176,24 @@ void GfxWindowBackendDeko3d::CreateSwapChain(std::uint32_t width, std::uint32_t 
         mDepthBuffers[i].initialize(depthLayout, mDepthMemBlock, depthStride * i);
     }
 
-    mSwapChain = dk::SwapchainMaker{ mDevice, nwindowGetDefault(), swapChainImages }.create();
+    mSwapChain = dk::SwapchainMaker{ mDevice, window, swapChainImages }.create();
+
+    {
+        u32 windowWidth = 0;
+        u32 windowHeight = 0;
+        const Result rc = nwindowGetDimensions(window, &windowWidth, &windowHeight);
+
+        char buffer[256];
+        if (R_SUCCEEDED(rc)) {
+            std::snprintf(buffer, sizeof(buffer), "CreateSwapChain: nwindow after=%ux%u, backend=%ux%u", windowWidth,
+                          windowHeight, mWidth, mHeight);
+        } else {
+            std::snprintf(buffer, sizeof(buffer), "CreateSwapChain: nwindowGetDimensions(after) failed rc=0x%08X",
+                          static_cast<unsigned int>(rc));
+        }
+
+        Deko3dTrace(buffer);
+    }
 }
 
 bool GfxWindowBackendDeko3d::LoadDeko3dShader(dk::Shader& shader, const char* path) {
@@ -240,13 +281,31 @@ void GfxWindowBackendDeko3d::Init(const char* gameName, const char* apiName, boo
                                   std::uint32_t height, std::int32_t posX, std::int32_t posY) {
     Deko3dTrace("Init: enter");
 
+    int displayWidth = 0;
+    int displayHeight = 0;
+    Ship::Switch::GetDisplaySize(&displayWidth, &displayHeight);
+
+    mWidth = static_cast<std::uint32_t>(displayWidth);
+    mHeight = static_cast<std::uint32_t>(displayHeight);
+
+    {
+        char buffer[256];
+        std::snprintf(buffer, sizeof(buffer),
+                      "Init: requested=%ux%u, fullscreen=%d, switchDisplay=%dx%d, operationMode=%d", width, height,
+                      startFullScreen ? 1 : 0, displayWidth, displayHeight, static_cast<int>(appletGetOperationMode()));
+        Deko3dTrace(buffer);
+    }
+
     // Input/events only
     if (SDL_Init(SDL_INIT_GAMECONTROLLER | SDL_INIT_JOYSTICK | SDL_INIT_EVENTS) != 0) {
         SPDLOG_ERROR("Failed to init SDL input: {}", SDL_GetError());
     }
 
-    mWidth = width ? width : 1280;
-    mHeight = height ? height : 720;
+    {
+        char buffer[256];
+        std::snprintf(buffer, sizeof(buffer), "Init: backend dimensions=%ux%u", mWidth, mHeight);
+        Deko3dTrace(buffer);
+    }
 
     Deko3dTrace("Init: creating device/queue");
     CreateDeko3dDevice();
@@ -313,10 +372,14 @@ void GfxWindowBackendDeko3d::SwapBuffersBegin() {
     }
 
     mQueue.signalFence(mFrameFence[mRecordingRing]); // Signals after the draws complete
+
     mIsFrameFenceValid[mRecordingRing] = true;
     gDbgSubmit += NowNs() - a1;
 
+    const auto s0 = NowNs();
     SyncFrameRateWithTime();
+    const auto s1 = NowNs();
+    gDbgPace += s1 - s0;
 
     const auto p0 = NowNs();
     mQueue.presentImage(mSwapChain, mCurrentSlot);
@@ -329,16 +392,22 @@ void GfxWindowBackendDeko3d::SwapBuffersBegin() {
 
     if (++gDbgFrames >= 60) {
         char buf[320];
-        std::snprintf(buf, sizeof(buf),
-                      "[deko-perf] avg us/60f: fence=%lld acquire=%lld submit=%lld present=%lld record=%lld | "
-                      "max us: fence=%lld acquire=%lld present=%lld",
-                      gDbgFence / 60 / 1000, gDbgAcquire / 60 / 1000, gDbgSubmit / 60 / 1000, gDbgPresent / 60 / 1000,
-                      gDbgRecord / 60 / 1000, gDbgFenceMax / 1000, gDbgAcquireMax / 1000, gDbgPresentMax / 1000);
+        std::snprintf(
+            buf, sizeof(buf),
+            "[deko-perf] avg us/60f: fence=%lld acquire=%lld submit=%lld pace=%lld present=%lld record=%lld | "
+            "max us: fence=%lld acquire=%lld present=%lld",
+            gDbgFence / 60 / 1000, gDbgAcquire / 60 / 1000, gDbgSubmit / 60 / 1000, gDbgPace / 60 / 1000,
+            gDbgPresent / 60 / 1000, gDbgRecord / 60 / 1000, gDbgFenceMax / 1000, gDbgAcquireMax / 1000,
+            gDbgPresentMax / 1000);
 
         Deko3dTrace(buf);
-        gDbgFence = gDbgAcquire = gDbgSubmit = gDbgPresent = gDbgRecord = 0;
-        gDbgFenceMax = gDbgAcquireMax = gDbgPresentMax = 0;
-        gDbgFrames = 0;
+
+        gDbgFence = 0;
+        gDbgAcquire = 0;
+        gDbgSubmit = 0;
+        gDbgPace = 0;
+        gDbgPresent = 0;
+        gDbgRecord = 0;
     }
 
     ++mFrameIndex;
