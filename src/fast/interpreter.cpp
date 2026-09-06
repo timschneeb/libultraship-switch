@@ -68,6 +68,30 @@ std::stack<std::string> currentDir;
 
 #define TEXTURE_CACHE_MAX_SIZE 1024
 
+namespace {
+std::int64_t gOpNs[256] = {};
+std::int64_t gOpCount[256] = {};
+
+struct StepTimer {
+    explicit StepTimer(std::uint8_t opcode) : Opcode(opcode), T0(std::chrono::steady_clock::now()) {
+    }
+
+    ~StepTimer() {
+        const auto ns =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - T0).count();
+        gOpNs[Opcode] += ns;
+        ++gOpCount[Opcode];
+
+        if (ns > 5000000) {
+            SPDLOG_CRITICAL("[step-spike] Opcode=0x{:02X} us={}", Opcode, ns / 1000);
+        }
+    }
+
+    std::uint8_t Opcode = 0;
+    std::chrono::steady_clock::time_point T0 = {};
+};
+} // namespace
+
 namespace Fast {
 
 static UcodeHandlers ucode_handler_index = ucode_f3dex2;
@@ -4738,6 +4762,7 @@ static void gfx_step() {
     auto cmd0 = cmd;
     int8_t opcode = (int8_t)(cmd->words.w0 >> 24);
 
+    StepTimer _st(static_cast<std::uint8_t>(opcode));
 #ifdef USE_GBI_TRACE
     if (cmd->words.trace.valid &&
         Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gEnableGFXTrace", 0)) {
@@ -5019,6 +5044,7 @@ void Interpreter::Run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_r
     mRenderingState.scissor = {};
 
     auto dbg = mGfxDebugger;
+    const auto loopT0 = std::chrono::steady_clock::now();
     g_exec_stack.start((F3DGfx*)commands);
     while (!g_exec_stack.cmd_stack.empty()) {
         auto cmd = g_exec_stack.cmd_stack.top();
@@ -5038,6 +5064,45 @@ void Interpreter::Run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_r
             g_exec_stack.gfx_path.pop_back();
         }
         gfx_step();
+    }
+
+    const auto loopT1 = std::chrono::steady_clock::now();
+    {
+        static std::int64_t sLoopNs = 0;
+        static std::int32_t sFrames = 0;
+        sLoopNs += std::chrono::duration_cast<std::chrono::nanoseconds>(loopT1 - loopT0).count();
+
+        if (++sFrames >= 60) {
+            std::int32_t index[256];
+
+            for (std::int32_t k = 0; k < 256; ++k) {
+                index[k] = k;
+            }
+
+            std::partial_sort(index, index + 5, index + 256,
+                              [](std::int32_t a, std::int32_t b) { return gOpNs[a] > gOpNs[b]; });
+
+            std::string top = {};
+
+            for (std::int32_t r = 0; r < 5; ++r) {
+                auto opcode = index[r];
+                if (gOpNs[opcode] == 0) {
+                    break;
+                }
+
+                top += fmt::format(" opcode=0x{:02X}:{}us/{}calls", opcode, gOpNs[opcode] / 60 / 1000,
+                                   gOpCount[opcode] / 60);
+            }
+
+            SPDLOG_CRITICAL("[step-top] loop={}us |{}", sLoopNs / 60 / 1000, top);
+            sLoopNs = 0;
+            sFrames = 0;
+
+            for (std::int32_t k = 0; k < 256; ++k) {
+                gOpNs[k] = 0;
+                gOpCount[k] = 0;
+            }
+        }
     }
 
     Flush();
