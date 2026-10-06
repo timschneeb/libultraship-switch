@@ -9,6 +9,39 @@
 #include "ship/Context.h"
 #include "ship/audio/Audio.h"
 
+// Used as a probe to locate the NRO's writable segment (see IsAddressInModule).
+static int sSwitchModuleRangeProbe;
+
+static bool QueryMemoryBlock(uintptr_t address, uintptr_t* start, uintptr_t* end) {
+    MemoryInfo info = {};
+    u32 pageInfo = 0;
+    if (R_FAILED(svcQueryMemory(&info, &pageInfo, static_cast<u64>(address)))) {
+        return false;
+    }
+    *start = static_cast<uintptr_t>(info.addr);
+    *end = static_cast<uintptr_t>(info.addr + info.size);
+    return true;
+}
+
+bool Ship::Switch::IsAddressInModule(uintptr_t address) {
+    // The NRO is mapped at a randomized address and switch.ld's __start__ is an absolute 0, so
+    // find the image's mapped range once with svcQueryMemory: the .text probe gives the image
+    // start, the .bss probe gives the image end.
+    static const uintptr_t moduleStart = [] {
+        uintptr_t start = 0;
+        uintptr_t end = 0;
+        QueryMemoryBlock(reinterpret_cast<uintptr_t>(&Ship::Switch::IsAddressInModule), &start, &end);
+        return start;
+    }();
+    static const uintptr_t moduleEnd = [] {
+        uintptr_t start = 0;
+        uintptr_t end = 0;
+        QueryMemoryBlock(reinterpret_cast<uintptr_t>(&sSwitchModuleRangeProbe), &start, &end);
+        return end;
+    }();
+    return moduleStart != 0 && address >= moduleStart && address < moduleEnd;
+}
+
 #define DOCKED_MODE 1
 #define HANDHELD_MODE 0
 

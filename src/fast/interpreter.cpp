@@ -10,6 +10,9 @@
 #if !defined(_WIN32) && !defined(__SWITCH__)
 #include <dlfcn.h>
 #endif
+#if defined(__SWITCH__)
+#include "ship/port/switch/SwitchImpl.h"
+#endif
 
 #include <any>
 #include <map>
@@ -3975,9 +3978,10 @@ static bool IsValidResolvedAddress(uintptr_t addr) {
     return GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                               reinterpret_cast<LPCSTR>(addr), &module) != 0;
 #elif defined(__SWITCH__)
-    // libnx has no dladdr; the NRO's static data (e.g. static TLUTs) lives at low addresses,
-    // so treat low pointers as valid.
-    return true;
+    // libnx has no dladdr, so ask the Switch port whether the address falls inside the NRO's
+    // mapped image (see Ship::Switch::IsAddressInModule). In-image statics (e.g. a static TLUT)
+    // are kept, while other low values are unresolved N64 segment addresses and get rejected.
+    return Ship::Switch::IsAddressInModule(addr);
 #else
     // For non-Windows platforms, check whether the address belongs to a loaded object.
     Dl_info info;
