@@ -1,5 +1,7 @@
 #include "ship/config/Config.h"
 
+#include <cstdio>
+#include <cstdint>
 #include <fstream>
 #include <string>
 #include <filesystem>
@@ -10,6 +12,38 @@
 #include "ship/Context.h"
 
 namespace fs = std::filesystem;
+
+#if defined(__SWITCH__) || defined(__WIIU__)
+// std::filesystem::rename/copy_file are not reliable with the Switch/WiiU toolchains
+// (see SaveManager::WriteFileSafely), so replace via a fopen-based copy.
+static bool CopyFileContents(const fs::path& src, const fs::path& dst) {
+    FILE* r = fopen(src.c_str(), "rb");
+    if (r == nullptr) {
+        return false;
+    }
+    FILE* w = fopen(dst.c_str(), "wb");
+    if (w == nullptr) {
+        fclose(r);
+        return false;
+    }
+    alignas(0x40) uint8_t buf[4096];
+    size_t res = 0;
+    bool ok = true;
+    while ((res = fread(buf, 1, sizeof(buf), r)) > 0) {
+        if (fwrite(buf, 1, res, w) != res) {
+            ok = false;
+            break;
+        }
+    }
+    // fread ending at EOF is expected; any other error fails the copy.
+    if (ferror(r)) {
+        ok = false;
+    }
+    fclose(r);
+    ok = fclose(w) == 0 && ok;
+    return ok;
+}
+#endif
 
 namespace Ship {
 Config::Config(std::string path) : mPath(std::move(path)), mIsNewInstance(false) {
@@ -231,7 +265,25 @@ void Config::Save() {
             return;
         }
     }
+#if defined(__SWITCH__) || defined(__WIIU__)
+    // std::filesystem::rename does not work reliably on Switch/WiiU, so emulate the
+    // atomic replace the same way SaveManager::WriteFileSafely does: remove the old
+    // config, copy the temp file over it, then clean up the temp file.
+    fs::remove(configPath, ec);
+    ec.clear();
+    if (!CopyFileContents(tempPath, configPath)) {
+        SPDLOG_ERROR("Could not replace config \"{}\": copy failed, keeping the existing config (temp kept at \"{}\")",
+                     mPath, tempPath.string());
+        return;
+    }
+    fs::remove(tempPath, ec);
+    if (ec) {
+        SPDLOG_ERROR("Could not clean up temp config \"{}\": {}", tempPath.string(), ec.message());
+    }
+    return;
+#else
     fs::rename(tempPath, configPath, ec);
+#endif
     if (ec) {
         SPDLOG_ERROR("Could not replace config \"{}\": {}", mPath, ec.message());
         std::error_code removeEc;
