@@ -187,6 +187,12 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
     )
 endif()
 
+if (CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+            ENABLE_DEKO3D
+    )
+endif()
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
     set_target_properties(${PROJECT_NAME} PROPERTIES
         XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC YES
