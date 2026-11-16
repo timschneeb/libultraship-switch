@@ -13,7 +13,14 @@ struct NXControllerState {
     PadState State = {};
     HidVibrationDeviceHandle Handles[2][2] = {};
     HidSixAxisSensorHandle Sensors[4] = {};
-    uint64_t LastExternalRumbleStyle = 0;
+    uint64_t LastExternalRumbleStyle = 0; // style whose vibration init into Handles[1] succeeded
+    bool HandheldRumbleReady = false;     // vibration init into Handles[0] succeeded
+    // SendRumble runs every game tick; these de-duplicate its logging.
+    uint64_t LastInitFailLog[2] = { ~0ULL, ~0ULL };
+    int LastSendPath = -1;
+    bool LastSendOn = false;
+    Result LastSendResult[2] = {};
+    int SendLogCount = 0;
     bool Initialized = false;
 };
 
@@ -38,6 +45,7 @@ class SwitchController {
     bool EnsureInitialized(uint8_t portIndex);
     HidNpadIdType GetNpadId(uint8_t portIndex) const;
     bool ReadSixAxisState(uint8_t portIndex, HidSixAxisSensorState& state);
+    bool InitVibration(uint8_t portIndex, int slot, HidNpadIdType npadId, uint64_t style);
 
     std::array<NXControllerState, 8> mControllers;
 };
